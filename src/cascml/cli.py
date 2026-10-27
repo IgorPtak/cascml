@@ -6,8 +6,12 @@ from pathlib import Path
 
 import yaml
 
+from cascml.data import DataError, resolve_inputs
+
+
 class ConfigError(Exception):
     """Raised when the analysis or model configuration is invalid."""
+
 
 # Order and names must match enum InputFeaturesCasc
 # in O2Physics/PWGLF/Utils/CascadeMlResponse.h 
@@ -165,20 +169,33 @@ def main(argv=None):
     """Entry point for the `cascml` command."""
     parser = argparse.ArgumentParser(prog="cascml", description="Train BDT models for cascademlselection in O2.")
     parser.add_argument("-c", "--config", required=True, help="analysis config (YAML)")
-    parser.add_argument("--model-params", default="configs/model_params.yml", help="XGBoost hyperparameters (YAML)")
+    parser.add_argument(
+        "--model-params",
+        help="XGBoost hyperparameters (YAML); default: model_params.yml next to the config",
+    )
+    parser.add_argument(
+        "--input", nargs="+", metavar="FILE",
+        help="override input.files from the config (paths relative to the current directory)",
+    )
     args = parser.parse_args(argv)
 
     try:
         cfg = load_yaml(args.config)
         validate_analysis(cfg)
-        params = load_yaml(args.model_params)
+        model_params = args.model_params or Path(args.config).parent / "model_params.yml"
+        params = load_yaml(model_params)
         for sp_name in cfg["species"]:
             model_params_for(params, sp_name)
-    except ConfigError as err:
-        print(f"cascml: config error: {err}", file=sys.stderr)
+        if args.input:
+            input_files = resolve_inputs(args.input, Path.cwd())
+        else:
+            input_files = resolve_inputs(cfg["input"]["files"], Path(args.config).parent)
+    except (ConfigError, DataError) as err:
+        print(f"cascml: {err}", file=sys.stderr)
         return 1
 
     print(f"case: {cfg['case']}")
+    print(f"input files ({len(input_files)}): {', '.join(str(f) for f in input_files)}")
     print(f"features ({len(cfg['features'])}): {', '.join(cfg['features'])}")
     for sp_name, sp in cfg["species"].items():
         print(f"species {sp_name}: pt_bins={sp['pt_bins']}, split_by_charge={sp['split_by_charge']}")

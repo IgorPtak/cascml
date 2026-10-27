@@ -100,6 +100,12 @@ def test_main_succeeds_on_valid_config(capsys):
     assert "species xi" in capsys.readouterr().out
 
 
+def test_main_works_from_any_directory(tmp_path, monkeypatch):
+    # Default model params and input files are found next to the config, not in the cwd.
+    monkeypatch.chdir(tmp_path)
+    assert main(["-c", str(CONFIG)]) == 0
+
+
 def test_main_returns_1_on_missing_file(capsys):
     assert main(["-c", "nie_ma.yml", "--model-params", str(MODEL_PARAMS)]) == 1
     assert "config file not found" in capsys.readouterr().err
