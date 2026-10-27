@@ -110,7 +110,7 @@ def validate_analysis(cfg):
         if not isinstance(flags, dict) or set(flags) != {"minus", "plus"}:
             raise ConfigError(f"species '{sp_name}': signal_flags must map exactly 'minus' and 'plus' to MC flag columns")
         if not isinstance(sp.get("split_by_charge"), bool):
-                raise ConfigError(f"species '{sp_name}': split_by_charge must be true or false")
+            raise ConfigError(f"species '{sp_name}': split_by_charge must be true or false")
         
     classes = cfg["classes"]
     if not isinstance(classes, list) or [c.get("name") for c in classes if isinstance(c, dict)] != ["bkg", "signal"]:
@@ -127,7 +127,7 @@ def validate_analysis(cfg):
     _require_positive_int(bootstrap.get("n"), "validation.bootstrap.n")
     _require_fraction(bootstrap.get("ci"), "validation.bootstrap.ci")
     for wp in cfg["validation"].get("working_points", []):
-            _require_fraction(wp, "validation.working_points")
+        _require_fraction(wp, "validation.working_points")
             
 
 def model_params_for(params, species):
