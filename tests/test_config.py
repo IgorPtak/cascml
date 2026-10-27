@@ -3,16 +3,11 @@ from pathlib import Path
 
 import pytest
 
-from cascml.cli import ConfigError, load_yaml, main, model_params_for, validate_analysis
+from cascml.cli import ConfigError, main, model_params_for, validate_analysis
 
 CONFIGS = Path(__file__).parent.parent / "configs"
 CONFIG = CONFIGS / "cascade_analysis.yml"
 MODEL_PARAMS = CONFIGS / "model_params.yml"
-
-
-@pytest.fixture
-def cfg():
-    return copy.deepcopy(load_yaml(CONFIG))
 
 
 def xi(c):

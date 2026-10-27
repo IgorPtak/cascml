@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 
-from cascml.data import DataError, list_trees, resolve_inputs
+from cascml.data import DataError, list_trees, load_species, resolve_inputs
 
 
 class ConfigError(Exception):
@@ -190,8 +190,8 @@ def main(argv=None):
             input_files = resolve_inputs(args.input, Path.cwd())
         else:
             input_files = resolve_inputs(cfg["input"]["files"], Path(args.config).parent)
-        
         trees = list_trees(input_files, cfg["input"]["df_prefix"], cfg["input"]["tree"])
+        samples = {sp_name: load_species(trees, cfg, sp_name) for sp_name in cfg["species"]}
     except (ConfigError, DataError) as err:
         print(f"cascml: {err}", file=sys.stderr)
         return 1
@@ -202,4 +202,7 @@ def main(argv=None):
     print(f"features ({len(cfg['features'])}): {', '.join(cfg['features'])}")
     for sp_name, sp in cfg["species"].items():
         print(f"species {sp_name}: pt_bins={sp['pt_bins']}, split_by_charge={sp['split_by_charge']}")
+        df = samples[sp_name]
+        print(f"  candidates: {len(df)}, signal: {int(df['label'].sum())}, bkg: {int((df['label'] == 0).sum())}")
+
     return 0
