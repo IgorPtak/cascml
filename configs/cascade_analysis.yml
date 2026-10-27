@@ -2,7 +2,7 @@ case: xi_test_hyperloop
 
 input: 
   files:
-  - ../AO2D_derived_test_hyperloop.root
+  - ../../data/AO2D_derived_test_hyperloop.root
   df_prefix: DF_
   tree: O2camlcandidates
   step_size: 100 MB
