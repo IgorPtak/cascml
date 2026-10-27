@@ -109,6 +109,8 @@ def validate_analysis(cfg):
         flags = sp.get("signal_flags")
         if not isinstance(flags, dict) or set(flags) != {"minus", "plus"}:
             raise ConfigError(f"species '{sp_name}': signal_flags must map exactly 'minus' and 'plus' to MC flag columns")
+        if not isinstance(sp.get("split_by_charge"), bool):
+                raise ConfigError(f"species '{sp_name}': split_by_charge must be true or false")
         
     classes = cfg["classes"]
     if not isinstance(classes, list) or [c.get("name") for c in classes if isinstance(c, dict)] != ["bkg", "signal"]:
@@ -127,8 +129,13 @@ def validate_analysis(cfg):
     for wp in cfg["validation"].get("working_points", []):
             _require_fraction(wp, "validation.working_points")
             
-    if not isinstance(sp.get("split_by_charge"), bool):
-        raise ConfigError(f"species '{sp_name}': split_by_charge must be true or false")
+
+def model_params_for(params, species):
+    """Return XGBoost hyperparameters for `species`: defaults overridden by per_species."""
+    if not isinstance(params.get("default"), dict):
+        raise ConfigError("model params: 'default' section is required")
+    overrides = params.get("per_species", {}).get(species) or {}
+    return {**params["default"], **overrides}
 
 
 def _contains_key(obj, key):
@@ -152,3 +159,27 @@ def _require_positive_int(value, where):
     """Raise ConfigError unless `value` is an integer > 0."""
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ConfigError(f"{where} must be a positive integer, got {value!r}")
+
+
+def main(argv=None):
+    """Entry point for the `cascml` command."""
+    parser = argparse.ArgumentParser(prog="cascml", description="Train BDT models for cascademlselection in O2.")
+    parser.add_argument("-c", "--config", required=True, help="analysis config (YAML)")
+    parser.add_argument("--model-params", default="configs/model_params.yml", help="XGBoost hyperparameters (YAML)")
+    args = parser.parse_args(argv)
+
+    try:
+        cfg = load_yaml(args.config)
+        validate_analysis(cfg)
+        params = load_yaml(args.model_params)
+        for sp_name in cfg["species"]:
+            model_params_for(params, sp_name)
+    except ConfigError as err:
+        print(f"cascml: config error: {err}", file=sys.stderr)
+        return 1
+
+    print(f"case: {cfg['case']}")
+    print(f"features ({len(cfg['features'])}): {', '.join(cfg['features'])}")
+    for sp_name, sp in cfg["species"].items():
+        print(f"species {sp_name}: pt_bins={sp['pt_bins']}, split_by_charge={sp['split_by_charge']}")
+    return 0

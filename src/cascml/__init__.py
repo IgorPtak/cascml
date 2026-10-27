@@ -1,2 +1,1 @@
-def main() -> None:
-    print("Hello from cascml!")
+"""BDT training pipeline for cascademlselection in O2."""
