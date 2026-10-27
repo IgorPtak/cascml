@@ -1,12 +1,20 @@
 """Reading O2camlcandidates from AO2D files and preparing training samples."""
 
 import glob
+import hashlib
+import json
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import uproot
 from sklearn.model_selection import train_test_split
+
+# Key under which cascml stores its metadata in the Parquet schema.
+PARQUET_META_KEY = b"cascml"
+SAMPLE_COLUMNS_EXTRA = ("pt", "charge", "label", "is_test")
 
 
 class DataError(Exception):
@@ -133,6 +141,7 @@ def check_guards(df, edges, guards, species):
                 f"need >= {guards['min_signal_train']} / {guards['min_signal_test']}"
             )
 
+
 def prepare_species(trees, cfg, species):
     """Full sample for `species`: selection, O2 features, pT bins, train/test split, statistics guards."""
     edges = cfg["species"][species]["pt_bins"]
@@ -140,3 +149,82 @@ def prepare_species(trees, cfg, species):
     df = split_train_test(df, cfg["split"]["test_size"], cfg["split"]["random_state"])
     check_guards(df, edges, cfg["guards"], species)
     return df
+
+
+def sample_hash(cfg, input_files):
+    """Short fingerprint of everything that determines the samples: analysis config and input files."""
+    payload = json.dumps({"config": cfg, "inputs": [str(f) for f in input_files]}, sort_keys=True)
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
+def bin_dir_name(lo, hi):
+    return f"pt_{lo:g}_{hi:g}"
+
+
+def write_samples(df, cfg, species, input_files, output_root):
+    """Write one Parquet file per pT bin and a manifest.json; return the manifest path."""
+    edges = cfg["species"][species]["pt_bins"]
+    features = list(cfg["features"])
+    species_dir = Path(output_root) / cfg["case"] / species
+    fingerprint = sample_hash(cfg, input_files)
+    bins = []
+    for b in range(len(edges) - 1):
+        lo, hi = edges[b], edges[b + 1]
+        rel_path = Path(bin_dir_name(lo, hi)) / "data" / "sample.parquet"
+        meta = {
+            "case": cfg["case"],
+            "species": species,
+            "pt_lo": lo,
+            "pt_hi": hi,
+            "features": features,
+            "sample_hash": fingerprint,
+            "input_files": [str(f) for f in input_files],
+        }
+        part = df.loc[df["pt_bin"] == b, features + list(SAMPLE_COLUMNS_EXTRA)]
+        table = pa.Table.from_pandas(part, preserve_index=False)
+        table = table.replace_schema_metadata({**table.schema.metadata, PARQUET_META_KEY: json.dumps(meta)})
+        (species_dir / rel_path).parent.mkdir(parents=True, exist_ok=True)
+        pq.write_table(table, species_dir / rel_path)
+        bins.append({"pt_lo": lo, "pt_hi": hi, "file": str(rel_path), **_counts(part)})
+    manifest = {
+        "case": cfg["case"],
+        "species": species,
+        "sample_hash": fingerprint,
+        "features": features,
+        "pt_bins": edges,
+        "bins": bins,
+    }
+    manifest_path = species_dir / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    return manifest_path
+
+
+def _counts(part):
+    signal = part["label"] == 1
+    return {
+        "n_train_signal": int((signal & ~part["is_test"]).sum()),
+        "n_train_bkg": int((~signal & ~part["is_test"]).sum()),
+        "n_test_signal": int((signal & part["is_test"]).sum()),
+        "n_test_bkg": int((~signal & part["is_test"]).sum()),
+    }
+
+
+def read_sample(path, expected_hash=None):
+    """Read one Parquet sample; return (DataFrame, metadata). Raise DataError if it is stale."""
+    table = pq.read_table(path)
+    meta = json.loads(table.schema.metadata[PARQUET_META_KEY])
+    if expected_hash is not None and meta["sample_hash"] != expected_hash:
+        raise DataError(
+            f"{path}: sample was produced with a different config or inputs "
+            f"(hash {meta['sample_hash']}, expected {expected_hash}); regenerate it with cascml"
+        )
+    return table.to_pandas(), meta
+
+
+def read_manifest(species_dir):
+    """Read manifest.json of one species; file paths in the result are absolute."""
+    species_dir = Path(species_dir)
+    manifest = json.loads((species_dir / "manifest.json").read_text())
+    for entry in manifest["bins"]:
+        entry["file"] = species_dir / entry["file"]
+    return manifest

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 
-from cascml.data import DataError, list_trees, prepare_species, resolve_inputs
+from cascml.data import DataError, list_trees, prepare_species, resolve_inputs, write_samples
 
 
 class ConfigError(Exception):
@@ -177,6 +177,10 @@ def main(argv=None):
         "--input", nargs="+", metavar="FILE",
         help="override input.files from the config (paths relative to the current directory)",
     )
+    parser.add_argument(
+        "--output",
+        help="output root directory; default: output/ next to the directory containing the config",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -192,6 +196,10 @@ def main(argv=None):
             input_files = resolve_inputs(cfg["input"]["files"], Path(args.config).parent)
         trees = list_trees(input_files, cfg["input"]["df_prefix"], cfg["input"]["tree"])
         samples = {sp_name: prepare_species(trees, cfg, sp_name) for sp_name in cfg["species"]}
+        output_root = Path(args.output) if args.output else Path(args.config).resolve().parent.parent / "output"
+        manifests = {
+            sp_name: write_samples(df, cfg, sp_name, input_files, output_root) for sp_name, df in samples.items()
+        }
     except (ConfigError, DataError) as err:
         print(f"cascml: {err}", file=sys.stderr)
         return 1
@@ -212,5 +220,6 @@ def main(argv=None):
                 f"train sig/bkg {int(train['label'].sum())}/{int((train['label'] == 0).sum())}, "
                 f"test sig/bkg {int(test['label'].sum())}/{int((test['label'] == 0).sum())}"
             )
+        print(f"  samples: {manifests[sp_name]}")
 
     return 0

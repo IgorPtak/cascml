@@ -90,15 +90,17 @@ def test_model_params_require_default():
         model_params_for({"per_species": {}}, "xi")
 
 
-def test_main_succeeds_on_valid_config(capsys, hyperloop_file):
-    assert main(["-c", str(CONFIG), "--model-params", str(MODEL_PARAMS), "--input", str(hyperloop_file)]) == 0
+def test_main_succeeds_on_valid_config(capsys, tmp_path, hyperloop_file):
+    args = ["-c", str(CONFIG), "--model-params", str(MODEL_PARAMS), "--input", str(hyperloop_file)]
+    assert main(args + ["--output", str(tmp_path)]) == 0
     assert "species xi" in capsys.readouterr().out
+    assert (tmp_path / "xi_test_hyperloop" / "xi" / "manifest.json").is_file()
 
 
 def test_main_works_from_any_directory(tmp_path, monkeypatch, hyperloop_file):
     # Default model params are found next to the config, not in the cwd.
     monkeypatch.chdir(tmp_path)
-    assert main(["-c", str(CONFIG), "--input", str(hyperloop_file)]) == 0
+    assert main(["-c", str(CONFIG), "--input", str(hyperloop_file), "--output", str(tmp_path)]) == 0
 
 
 def test_main_returns_1_on_missing_file(capsys):

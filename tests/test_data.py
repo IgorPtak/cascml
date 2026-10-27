@@ -11,11 +11,15 @@ from cascml.data import (
     list_trees,
     load_species,
     prepare_species,
+    read_manifest,
+    read_sample,
     required_columns,
     resolve_inputs,
+    sample_hash,
     select_species,
     split_train_test,
     to_model_frame,
+    write_samples,
 )
 
 
@@ -262,3 +266,51 @@ def test_hyperloop_xi_prepared(hyperloop_file, cfg):
     assert len(out) == 12017
     assert out.groupby("pt_bin")["label"].sum().tolist() == [1825, 2936, 682]
     assert abs(out["is_test"].mean() - 0.3) < 0.01
+
+
+@pytest.fixture
+def prepared(cfg):
+    # Minimal prepared sample: 2 rows per pT bin of the real config, one signal and one background.
+    n_bins = len(cfg["species"]["xi"]["pt_bins"]) - 1
+    rows = 2 * n_bins
+    df = pd.DataFrame({name: np.full(rows, 0.5, dtype=np.float32) for name in cfg["features"]})
+    return df.assign(
+        pt=np.full(rows, 1.0, dtype=np.float32),
+        charge=np.tile(np.array([-1, 1], dtype=np.int8), n_bins),
+        label=np.tile(np.array([1, 0], dtype=np.int8), n_bins),
+        is_test=np.tile([False, True], n_bins),
+        pt_bin=np.repeat(np.arange(n_bins, dtype=np.int8), 2),
+    )
+
+
+INPUTS = ["/data/AO2D_1.root"]
+
+
+def test_samples_roundtrip(prepared, cfg, tmp_path):
+    manifest = read_manifest(write_samples(prepared, cfg, "xi", INPUTS, tmp_path).parent)
+    assert [b["file"].parent.parent.name for b in manifest["bins"]] == ["pt_0.5_1.5", "pt_1.5_3", "pt_3_10"]
+    df, meta = read_sample(manifest["bins"][0]["file"], manifest["sample_hash"])
+    # Contract with other models: O2 feature order, then pt, charge, label, is_test; no pt_bin.
+    assert list(df.columns) == list(cfg["features"]) + ["pt", "charge", "label", "is_test"]
+    assert df["cascradius"].dtype == np.float32 and df["label"].dtype == np.int8
+    assert (meta["pt_lo"], meta["pt_hi"], meta["input_files"]) == (0.5, 1.5, INPUTS)
+
+
+def test_manifest_counts(prepared, cfg, tmp_path):
+    manifest = read_manifest(write_samples(prepared, cfg, "xi", INPUTS, tmp_path).parent)
+    counts = {k: v for k, v in manifest["bins"][0].items() if k.startswith("n_")}
+    assert counts == {"n_train_signal": 1, "n_train_bkg": 0, "n_test_signal": 0, "n_test_bkg": 1}
+
+
+def test_hash_depends_on_config_and_inputs(cfg):
+    base = sample_hash(cfg, INPUTS)
+    assert sample_hash(cfg, INPUTS) == base
+    assert sample_hash(cfg, ["/data/AO2D_2.root"]) != base
+    cfg["split"]["random_state"] = 7
+    assert sample_hash(cfg, INPUTS) != base
+
+
+def test_stale_sample_is_rejected(prepared, cfg, tmp_path):
+    manifest = read_manifest(write_samples(prepared, cfg, "xi", INPUTS, tmp_path).parent)
+    with pytest.raises(DataError, match="regenerate"):
+        read_sample(manifest["bins"][0]["file"], expected_hash="0" * 16)
