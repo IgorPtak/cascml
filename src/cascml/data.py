@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import uproot
+from sklearn.model_selection import train_test_split
 
 
 class DataError(Exception):
@@ -95,3 +96,47 @@ def load_species(trees, cfg, species):
     for chunk in uproot.iterate(trees, columns, step_size=cfg["input"]["step_size"], library="pd"):
         frames.append(to_model_frame(select_species(chunk, sp), cfg["features"]))
     return pd.concat(frames, ignore_index=True)
+
+
+def assign_pt_bins(df, edges):
+    """Add `pt_bin` (index into `edges`) and drop candidates outside [edges[0], edges[-1])."""
+    edges = np.asarray(edges, dtype=np.float32)
+    idx = np.searchsorted(edges, df["pt"].to_numpy(), side="right") - 1
+    inside = (idx >= 0) & (idx < len(edges) - 1)
+    return df[inside].assign(pt_bin=idx[inside].astype(np.int8)).reset_index(drop=True)
+
+
+def split_train_test(df, test_size, random_state):
+    """Add `is_test`, stratified by label separately in every pT bin."""
+    is_test = np.zeros(len(df), dtype=bool)
+    for b, group in df.groupby("pt_bin"):
+        counts = group["label"].value_counts()
+        if len(counts) < 2 or counts.min() < 2:
+            raise DataError(f"pT bin {b}: need >= 2 signal and >= 2 background candidates to split, got {counts.to_dict()}")
+        _, test_idx = train_test_split(
+            group.index, test_size=test_size, random_state=random_state, stratify=group["label"]
+        )
+        is_test[test_idx] = True
+    return df.assign(is_test=is_test)
+
+
+def check_guards(df, edges, guards, species):
+    """Raise DataError if any pT bin is empty or has too little signal in train or test."""
+    for b in range(len(edges) - 1):
+        group = df[df["pt_bin"] == b]
+        signal = group["label"] == 1
+        n_train = int((signal & ~group["is_test"]).sum())
+        n_test = int((signal & group["is_test"]).sum())
+        if n_train < guards["min_signal_train"] or n_test < guards["min_signal_test"]:
+            raise DataError(
+                f"{species} pT [{edges[b]}, {edges[b + 1]}): signal train={n_train}, test={n_test}; "
+                f"need >= {guards['min_signal_train']} / {guards['min_signal_test']}"
+            )
+
+def prepare_species(trees, cfg, species):
+    """Full sample for `species`: selection, O2 features, pT bins, train/test split, statistics guards."""
+    edges = cfg["species"][species]["pt_bins"]
+    df = assign_pt_bins(load_species(trees, cfg, species), edges)
+    df = split_train_test(df, cfg["split"]["test_size"], cfg["split"]["random_state"])
+    check_guards(df, edges, cfg["guards"], species)
+    return df

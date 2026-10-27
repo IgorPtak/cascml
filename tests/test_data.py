@@ -6,11 +6,15 @@ import uproot
 from conftest import TREE_DEFAULTS
 from cascml.data import (
     DataError,
+    assign_pt_bins,
+    check_guards,
     list_trees,
     load_species,
+    prepare_species,
     required_columns,
     resolve_inputs,
     select_species,
+    split_train_test,
     to_model_frame,
 )
 
@@ -168,3 +172,93 @@ def test_hyperloop_xi_sample(hyperloop_file, cfg):
     assert set(out.loc[out["label"] == 1, "charge"]) == {-1, 1}
     # Tree-creator cut cos(PA) >= 0.9 must survive the angle -> cos transform.
     assert out["casccosPA"].min() >= np.float32(0.9)
+
+
+EDGES = [0.5, 1.5, 3.0, 10.0]
+
+
+def o2_find_pt_bin(edges, pt):
+    # Direct transcription of findPtBin in cascademlselection.cxx (std::upper_bound - 1, -1 outside).
+    if pt < edges[0] or pt >= edges[-1]:
+        return -1
+    return next(i for i, e in enumerate(edges) if e > pt) - 1
+
+
+def test_pt_bin_edges_are_lower_inclusive():
+    df = pd.DataFrame({"pt": np.array([0.49, 0.5, 1.4999, 1.5, 9.99, 10.0], dtype=np.float32)})
+    out = assign_pt_bins(df, EDGES)
+    assert list(out["pt"]) == list(np.array([0.5, 1.4999, 1.5, 9.99], dtype=np.float32))
+    assert list(out["pt_bin"]) == [0, 0, 1, 2]
+    assert list(out.index) == [0, 1, 2, 3]
+
+
+def test_pt_bins_match_o2_find_pt_bin():
+    pt = np.random.default_rng(1).uniform(0.0, 12.0, 2000).astype(np.float32)
+    out = assign_pt_bins(pd.DataFrame({"pt": pt}), EDGES)
+    expected = [b for b in (o2_find_pt_bin(EDGES, p) for p in pt) if b >= 0]
+    assert list(out["pt_bin"]) == expected
+
+
+@pytest.fixture
+def binned():
+    # Two bins, 30% signal in each.
+    rng = np.random.default_rng(2)
+    n = 1000
+    return pd.DataFrame(
+        {
+            "pt_bin": np.repeat([0, 1], n // 2).astype(np.int8),
+            "label": (rng.random(n) < 0.3).astype(np.int8),
+        }
+    )
+
+
+def test_split_is_stratified_per_bin(binned):
+    out = split_train_test(binned, 0.3, 42)
+    for _, group in out.groupby("pt_bin"):
+        assert abs(group["is_test"].mean() - 0.3) < 0.01
+        sig_frac_train = group.loc[~group["is_test"], "label"].mean()
+        sig_frac_test = group.loc[group["is_test"], "label"].mean()
+        assert abs(sig_frac_train - sig_frac_test) < 0.01
+
+
+def test_split_is_reproducible(binned):
+    a = split_train_test(binned, 0.3, 42)["is_test"]
+    b = split_train_test(binned, 0.3, 42)["is_test"]
+    assert (a == b).all()
+
+
+def test_split_rejects_bin_without_both_classes():
+    df = pd.DataFrame({"pt_bin": np.zeros(10, dtype=np.int8), "label": np.zeros(10, dtype=np.int8)})
+    with pytest.raises(DataError, match="pT bin 0"):
+        split_train_test(df, 0.3, 42)
+
+
+GUARDS = {"min_signal_train": 5, "min_signal_test": 2}
+
+
+def test_guards_pass_with_enough_signal():
+    df = pd.DataFrame(
+        {"pt_bin": [0] * 10, "label": [1] * 10, "is_test": [False] * 7 + [True] * 3}
+    )
+    check_guards(df, [0.5, 1.5], GUARDS, "xi")
+
+
+def test_guards_report_bin_in_pt_units():
+    df = pd.DataFrame(
+        {"pt_bin": [0] * 4, "label": [1] * 4, "is_test": [False] * 3 + [True]}
+    )
+    with pytest.raises(DataError, match=r"xi pT \[0\.5, 1\.5\): signal train=3, test=1"):
+        check_guards(df, [0.5, 1.5], GUARDS, "xi")
+
+
+def test_guards_catch_empty_bin():
+    df = pd.DataFrame({"pt_bin": [0] * 10, "label": [1] * 10, "is_test": [False] * 7 + [True] * 3})
+    with pytest.raises(DataError, match=r"\[1\.5, 3\.0\): signal train=0"):
+        check_guards(df, [0.5, 1.5, 3.0], GUARDS, "xi")
+
+
+def test_hyperloop_xi_prepared(hyperloop_file, cfg):
+    out = prepare_species(list_trees([hyperloop_file], "DF_", "O2camlcandidates"), cfg, "xi")
+    assert len(out) == 12017
+    assert out.groupby("pt_bin")["label"].sum().tolist() == [1825, 2936, 682]
+    assert abs(out["is_test"].mean() - 0.3) < 0.01

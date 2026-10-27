@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 
-from cascml.data import DataError, list_trees, load_species, resolve_inputs
+from cascml.data import DataError, list_trees, prepare_species, resolve_inputs
 
 
 class ConfigError(Exception):
@@ -191,7 +191,7 @@ def main(argv=None):
         else:
             input_files = resolve_inputs(cfg["input"]["files"], Path(args.config).parent)
         trees = list_trees(input_files, cfg["input"]["df_prefix"], cfg["input"]["tree"])
-        samples = {sp_name: load_species(trees, cfg, sp_name) for sp_name in cfg["species"]}
+        samples = {sp_name: prepare_species(trees, cfg, sp_name) for sp_name in cfg["species"]}
     except (ConfigError, DataError) as err:
         print(f"cascml: {err}", file=sys.stderr)
         return 1
@@ -203,6 +203,14 @@ def main(argv=None):
     for sp_name, sp in cfg["species"].items():
         print(f"species {sp_name}: pt_bins={sp['pt_bins']}, split_by_charge={sp['split_by_charge']}")
         df = samples[sp_name]
-        print(f"  candidates: {len(df)}, signal: {int(df['label'].sum())}, bkg: {int((df['label'] == 0).sum())}")
+        edges = sp["pt_bins"]
+        for b in range(len(edges) - 1):
+            group = df[df["pt_bin"] == b]
+            train, test = group[~group["is_test"]], group[group["is_test"]]
+            print(
+                f"  pT [{edges[b]}, {edges[b + 1]}): "
+                f"train sig/bkg {int(train['label'].sum())}/{int((train['label'] == 0).sum())}, "
+                f"test sig/bkg {int(test['label'].sum())}/{int((test['label'] == 0).sum())}"
+            )
 
     return 0
