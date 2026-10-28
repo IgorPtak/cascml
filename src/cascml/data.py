@@ -82,7 +82,7 @@ def select_species(chunk, sp):
 
 
 def to_model_frame(chunk, features):
-    """Build the model input: O2 feature names in config order (float32) plus pt, charge, label."""
+    """Build the model input: O2 feature names in config order (float32) plus pt, charge, label, cand_id."""
     out = {}
     for name, spec in features.items():
         values = chunk[spec["column"]].to_numpy(dtype=np.float32)
@@ -92,6 +92,7 @@ def to_model_frame(chunk, features):
     out["pt"] = chunk["fPt"].to_numpy(dtype=np.float32)
     out["charge"] = chunk["fCharge"].to_numpy(dtype=np.int8)
     out["label"] = chunk["label"].to_numpy()
+    out["cand_id"] = chunk["cand_id"].to_numpy()
     return pd.DataFrame(out)
 
 
@@ -101,7 +102,12 @@ def load_species(trees, cfg, species):
     columns = required_columns(cfg, species)
     check_columns(trees[0], columns)
     frames = []
-    for chunk in uproot.iterate(trees, columns, step_size=cfg["input"]["step_size"], library="pd"):
+    for chunk, report in uproot.iterate(
+        trees, columns, step_size=cfg["input"]["step_size"], library="pd", report=True
+    ):
+        # Global entry number over all input trees, assigned before any selection.
+        ids = np.arange(report.global_entry_start, report.global_entry_stop, dtype=np.int64)
+        chunk = chunk.assign(cand_id=ids)
         frames.append(to_model_frame(select_species(chunk, sp), cfg["features"]))
     return pd.concat(frames, ignore_index=True)
 

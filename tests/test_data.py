@@ -134,20 +134,21 @@ def test_required_columns(cfg):
 
 
 def test_model_frame_columns_and_types(cfg):
-    chunk = pd.DataFrame({col: [default] for col, (_, default) in TREE_DEFAULTS.items()}).assign(label=1)
+    chunk = pd.DataFrame({col: [default] for col, (_, default) in TREE_DEFAULTS.items()}).assign(label=1, cand_id=0)
     out = to_model_frame(chunk, cfg["features"])
-    assert list(out.columns) == list(cfg["features"]) + ["pt", "charge", "label"]
+    assert list(out.columns) == list(cfg["features"]) + ["pt", "charge", "label", "cand_id"]
     assert all(out[name].dtype == np.float32 for name in cfg["features"])
 
 
 def test_model_frame_applies_cos(cfg):
     angles = np.array([0.0, 0.1, 0.45], dtype=np.float32)
-    chunk = pd.DataFrame({col: [default] * 3 for col, (_, default) in TREE_DEFAULTS.items()}).assign(label=0)
+    chunk = pd.DataFrame({col: [default] * 3 for col, (_, default) in TREE_DEFAULTS.items()}).assign(label=0, cand_id=[0, 1, 2])
     chunk["fCascPA"] = angles
     out = to_model_frame(chunk, cfg["features"])
     assert out["casccosPA"][0] == 1.0
     assert np.isclose(out["casccosPA"], np.cos(angles.astype(np.float64)), atol=1e-6).all()
     assert (out["cascradius"] == np.float32(2.0)).all()
+    assert list(out["cand_id"]) == [0, 1, 2]
 
 
 def test_load_species_reads_all_dfs(make_ao2d, cfg):
@@ -161,6 +162,8 @@ def test_load_species_reads_all_dfs(make_ao2d, cfg):
     assert list(out["label"]) == [1, 1, 0]
     assert list(out["charge"]) == [-1, 1, -1]
     assert list(out.index) == [0, 1, 2]
+    # Entry 1 (Omega window only) is dropped: cand_id keeps the global entry number, the index does not.
+    assert list(out["cand_id"]) == [0, 2, 3]
 
 
 def test_load_species_reports_missing_column(make_ao2d, cfg):
@@ -176,6 +179,9 @@ def test_hyperloop_xi_sample(hyperloop_file, cfg):
     assert set(out.loc[out["label"] == 1, "charge"]) == {-1, 1}
     # Tree-creator cut cos(PA) >= 0.9 must survive the angle -> cos transform.
     assert out["casccosPA"].min() >= np.float32(0.9)
+    assert out["cand_id"].is_unique
+    assert out["cand_id"].min() >= 0 and out["cand_id"].max() <= 14866
+    assert out["cand_id"].dtype == np.int64
 
 
 EDGES = [0.5, 1.5, 3.0, 10.0]
