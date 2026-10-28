@@ -14,6 +14,8 @@ from sklearn.model_selection import StratifiedKFold, train_test_split
 
 # Key under which cascml stores its metadata in the Parquet schema.
 PARQUET_META_KEY = b"cascml"
+# Bump when the sample columns or metadata change; read_sample rejects other versions.
+# 1: initial format, 2: cand_id column.
 FORMAT_VERSION = 2
 SAMPLE_COLUMNS_EXTRA = ("pt", "charge", "label", "is_test", "fold", "cand_id")
 
