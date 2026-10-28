@@ -15,7 +15,7 @@ AO2D files are not in the repository. By default the config looks for them in `.
 ## Building samples
 
 ```bash
-uv run cascml -c configs/cascade_analysis.yml [--input FILE.root ...] [--output DIR]
+uv run cascml prepare -c configs/cascade_analysis.yml [--input FILE.root ...] [--output DIR]
 ```
 
 Output goes to `output/<case>/<species>/`: a `manifest.json` and one Parquet file per pT bin (12 features with O2 names and order, `pt`, `charge`, `label`, `is_test`, `fold`, `cand_id`).

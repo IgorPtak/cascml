@@ -7,7 +7,6 @@ from cascml.cli import ConfigError, main, model_params_for, validate_analysis
 
 CONFIGS = Path(__file__).parent.parent / "configs"
 CONFIG = CONFIGS / "cascade_analysis.yml"
-MODEL_PARAMS = CONFIGS / "model_params.yml"
 
 
 def xi(c):
@@ -93,18 +92,19 @@ def test_model_params_require_default():
 
 
 def test_main_succeeds_on_valid_config(capsys, tmp_path, hyperloop_file):
-    args = ["-c", str(CONFIG), "--model-params", str(MODEL_PARAMS), "--input", str(hyperloop_file)]
+    args = ["prepare", "-c", str(CONFIG), "--input", str(hyperloop_file)]
     assert main(args + ["--output", str(tmp_path)]) == 0
     assert "species xi" in capsys.readouterr().out
     assert (tmp_path / "xi_test_hyperloop" / "xi" / "manifest.json").is_file()
 
 
-def test_main_works_from_any_directory(tmp_path, monkeypatch, hyperloop_file):
-    # Default model params are found next to the config, not in the cwd.
-    monkeypatch.chdir(tmp_path)
-    assert main(["-c", str(CONFIG), "--input", str(hyperloop_file), "--output", str(tmp_path)]) == 0
-
-
 def test_main_returns_1_on_missing_file(capsys):
-    assert main(["-c", "nie_ma.yml", "--model-params", str(MODEL_PARAMS)]) == 1
+    assert main(["prepare", "-c", "nie_ma.yml"]) == 1
     assert "config file not found" in capsys.readouterr().err
+
+
+def test_main_requires_command(capsys):
+    with pytest.raises(SystemExit) as exc:
+        main([])
+    assert exc.value.code == 2
+    assert "required: command" in capsys.readouterr().err

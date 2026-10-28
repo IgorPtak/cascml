@@ -146,6 +146,40 @@ def model_params_for(params, species):
     return {**params["default"], **overrides}
 
 
+def run_prepare(args):
+    """`cascml prepare`: validate the config, read AO2D files and write Parquet samples."""
+    cfg = load_yaml(args.config)
+    validate_analysis(cfg)
+    if args.input:
+        input_files = resolve_inputs(args.input, Path.cwd())
+    else:
+        input_files = resolve_inputs(cfg["input"]["files"], Path(args.config).parent)
+    trees = list_trees(input_files, cfg["input"]["df_prefix"], cfg["input"]["tree"])
+    samples = {sp_name: prepare_species(trees, cfg, sp_name) for sp_name in cfg["species"]}
+    output_root = Path(args.output) if args.output else Path(args.config).resolve().parent.parent / "output"
+    manifests = {
+        sp_name: write_samples(df, cfg, sp_name, input_files, output_root) for sp_name, df in samples.items()
+    }
+    print(f"case: {cfg['case']}")
+    print(f"input files ({len(input_files)}): {', '.join(str(f) for f in input_files)}")
+    print(f"trees: {len(trees)}")
+    print(f"features ({len(cfg['features'])}): {', '.join(cfg['features'])}")
+    for sp_name, sp in cfg["species"].items():
+        print(f"species {sp_name}: pt_bins={sp['pt_bins']}, split_by_charge={sp['split_by_charge']}")
+        df = samples[sp_name]
+        edges = sp["pt_bins"]
+        for b in range(len(edges) - 1):
+            group = df[df["pt_bin"] == b]
+            train, test = group[~group["is_test"]], group[group["is_test"]]
+            print(
+                f"  pT [{edges[b]}, {edges[b + 1]}): "
+                f"train sig/bkg {int(train['label'].sum())}/{int((train['label'] == 0).sum())}, "
+                f"test sig/bkg {int(test['label'].sum())}/{int((test['label'] == 0).sum())}"
+            )
+        print(f"  samples: {manifests[sp_name]}")
+    return 0
+
+
 def _contains_key(obj, key):
     """Return True if `key` appears in any mapping nested anywhere in `obj`."""
     if isinstance(obj, dict):
@@ -172,58 +206,23 @@ def _require_positive_int(value, where):
 def main(argv=None):
     """Entry point for the `cascml` command."""
     parser = argparse.ArgumentParser(prog="cascml", description="Train BDT models for cascademlselection in O2.")
-    parser.add_argument("-c", "--config", required=True, help="analysis config (YAML)")
-    parser.add_argument(
-        "--model-params",
-        help="XGBoost hyperparameters (YAML); default: model_params.yml next to the config",
-    )
-    parser.add_argument(
+    commands = parser.add_subparsers(dest="command", required=True)
+
+    prepare = commands.add_parser("prepare", help="build Parquet samples from AO2D files")
+    prepare.add_argument("-c", "--config", required=True, help="analysis config (YAML)")
+    prepare.add_argument(
         "--input", nargs="+", metavar="FILE",
         help="override input.files from the config (paths relative to the current directory)",
     )
-    parser.add_argument(
+    prepare.add_argument(
         "--output",
         help="output root directory; default: output/ next to the directory containing the config",
     )
-    args = parser.parse_args(argv)
+    prepare.set_defaults(func=run_prepare)
 
+    args = parser.parse_args(argv)
     try:
-        cfg = load_yaml(args.config)
-        validate_analysis(cfg)
-        model_params = args.model_params or Path(args.config).parent / "model_params.yml"
-        params = load_yaml(model_params)
-        for sp_name in cfg["species"]:
-            model_params_for(params, sp_name)
-        if args.input:
-            input_files = resolve_inputs(args.input, Path.cwd())
-        else:
-            input_files = resolve_inputs(cfg["input"]["files"], Path(args.config).parent)
-        trees = list_trees(input_files, cfg["input"]["df_prefix"], cfg["input"]["tree"])
-        samples = {sp_name: prepare_species(trees, cfg, sp_name) for sp_name in cfg["species"]}
-        output_root = Path(args.output) if args.output else Path(args.config).resolve().parent.parent / "output"
-        manifests = {
-            sp_name: write_samples(df, cfg, sp_name, input_files, output_root) for sp_name, df in samples.items()
-        }
+        return args.func(args)
     except (ConfigError, DataError) as err:
         print(f"cascml: {err}", file=sys.stderr)
         return 1
-
-    print(f"case: {cfg['case']}")
-    print(f"input files ({len(input_files)}): {', '.join(str(f) for f in input_files)}")
-    print(f"trees: {len(trees)}")
-    print(f"features ({len(cfg['features'])}): {', '.join(cfg['features'])}")
-    for sp_name, sp in cfg["species"].items():
-        print(f"species {sp_name}: pt_bins={sp['pt_bins']}, split_by_charge={sp['split_by_charge']}")
-        df = samples[sp_name]
-        edges = sp["pt_bins"]
-        for b in range(len(edges) - 1):
-            group = df[df["pt_bin"] == b]
-            train, test = group[~group["is_test"]], group[group["is_test"]]
-            print(
-                f"  pT [{edges[b]}, {edges[b + 1]}): "
-                f"train sig/bkg {int(train['label'].sum())}/{int((train['label'] == 0).sum())}, "
-                f"test sig/bkg {int(test['label'].sum())}/{int((test['label'] == 0).sum())}"
-            )
-        print(f"  samples: {manifests[sp_name]}")
-
-    return 0
