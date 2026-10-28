@@ -1,3 +1,5 @@
+![tests](https://github.com/IgorPtak/cascml/actions/workflows/tests.yml/badge.svg)
+
 # cascml
 
 Training Ξ/Ω classifiers for `cascademlselection` in O2Physics. Input: the `O2camlcandidates` table from `cascadeMLSelectionTreeCreator` (MC AO2D).
