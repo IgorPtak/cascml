@@ -14,7 +14,8 @@ from sklearn.model_selection import StratifiedKFold, train_test_split
 
 # Key under which cascml stores its metadata in the Parquet schema.
 PARQUET_META_KEY = b"cascml"
-SAMPLE_COLUMNS_EXTRA = ("pt", "charge", "label", "is_test", "fold")
+FORMAT_VERSION = 2
+SAMPLE_COLUMNS_EXTRA = ("pt", "charge", "label", "is_test", "fold", "cand_id")
 
 
 class DataError(Exception):
@@ -194,6 +195,7 @@ def write_samples(df, cfg, species, input_files, output_root):
         lo, hi = edges[b], edges[b + 1]
         rel_path = Path(bin_dir_name(lo, hi)) / "data" / "sample.parquet"
         meta = {
+            "format_version": FORMAT_VERSION,
             "case": cfg["case"],
             "species": species,
             "pt_lo": lo,
@@ -209,6 +211,7 @@ def write_samples(df, cfg, species, input_files, output_root):
         pq.write_table(table, species_dir / rel_path)
         bins.append({"pt_lo": lo, "pt_hi": hi, "file": str(rel_path), **_counts(part)})
     manifest = {
+        "format_version": FORMAT_VERSION,
         "case": cfg["case"],
         "species": species,
         "sample_hash": fingerprint,
@@ -236,6 +239,12 @@ def read_sample(path, expected_hash=None):
     """Read one Parquet sample; return (DataFrame, metadata). Raise DataError if it is stale."""
     table = pq.read_table(path)
     meta = json.loads(table.schema.metadata[PARQUET_META_KEY])
+    version = meta.get("format_version", 1)
+    if version != FORMAT_VERSION:
+        raise DataError(
+            f"{path}: sample format version {version}, this cascml expects {FORMAT_VERSION}; "
+            "regenerate it with cascml"
+        )
     if expected_hash is not None and meta["sample_hash"] != expected_hash:
         raise DataError(
             f"{path}: sample was produced with a different config or inputs "

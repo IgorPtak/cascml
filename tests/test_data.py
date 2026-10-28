@@ -5,6 +5,7 @@ import uproot
 
 from conftest import TREE_DEFAULTS
 from cascml.data import (
+    FORMAT_VERSION,
     DataError,
     assign_pt_bins,
     check_guards,
@@ -318,6 +319,8 @@ def prepared(cfg):
         is_test=np.tile([False, True], n_bins),
         fold=np.tile(np.array([0, -1], dtype=np.int8), n_bins),
         pt_bin=np.repeat(np.arange(n_bins, dtype=np.int8), 2),
+        # Offset so that cand_id cannot be confused with the row number.
+        cand_id=np.arange(rows, dtype=np.int64) + 100,
     )
 
 
@@ -328,10 +331,12 @@ def test_samples_roundtrip(prepared, cfg, tmp_path):
     manifest = read_manifest(write_samples(prepared, cfg, "xi", INPUTS, tmp_path).parent)
     assert [b["file"].parent.parent.name for b in manifest["bins"]] == ["pt_0.5_1.5", "pt_1.5_3", "pt_3_10"]
     df, meta = read_sample(manifest["bins"][0]["file"], manifest["sample_hash"])
-    # Contract with other models: O2 feature order, then pt, charge, label, is_test, fold; no pt_bin.
-    assert list(df.columns) == list(cfg["features"]) + ["pt", "charge", "label", "is_test", "fold"]
+    # Contract with other models: O2 feature order, then pt, charge, label, is_test, fold, cand_id; no pt_bin.
+    assert list(df.columns) == list(cfg["features"]) + ["pt", "charge", "label", "is_test", "fold", "cand_id"]
     assert df["cascradius"].dtype == np.float32 and df["label"].dtype == np.int8 and df["fold"].dtype == np.int8
+    assert list(df["cand_id"]) == [100, 101] and df["cand_id"].dtype == np.int64
     assert (meta["pt_lo"], meta["pt_hi"], meta["input_files"]) == (0.5, 1.5, INPUTS)
+    assert meta["format_version"] == FORMAT_VERSION
 
 
 def test_manifest_counts(prepared, cfg, tmp_path):
@@ -358,3 +363,11 @@ def test_stale_sample_is_rejected(prepared, cfg, tmp_path):
     manifest = read_manifest(write_samples(prepared, cfg, "xi", INPUTS, tmp_path).parent)
     with pytest.raises(DataError, match="regenerate"):
         read_sample(manifest["bins"][0]["file"], expected_hash="0" * 16)
+
+
+def test_sample_from_other_format_version_is_rejected(prepared, cfg, tmp_path, monkeypatch):
+    manifest = read_manifest(write_samples(prepared, cfg, "xi", INPUTS, tmp_path).parent)
+    # Reading with a cascml that expects a newer format.
+    monkeypatch.setattr("cascml.data.FORMAT_VERSION", 3)
+    with pytest.raises(DataError, match="format version 2"):
+        read_sample(manifest["bins"][0]["file"])
