@@ -124,6 +124,10 @@ def validate_analysis(cfg):
             raise ConfigError(f"class '{c['name']}': only source 'mc' is implemented, got {c.get('source')!r}")
 
     _require_fraction(cfg["split"].get("test_size"), "split.test_size")
+    n_folds = cfg["split"].get("n_folds")
+    _require_positive_int(n_folds, "split.n_folds")
+    if n_folds < 2:
+        raise ConfigError("split.n_folds must be at least 2 (one fold is used for validation)")
     _require_positive_int(cfg["guards"].get("min_signal_train"), "guards.min_signal_train")
     _require_positive_int(cfg["guards"].get("min_signal_test"), "guards.min_signal_test")
 

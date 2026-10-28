@@ -18,7 +18,9 @@ AO2D files are not in the repository. By default the config looks for them in `.
 uv run cascml -c configs/cascade_analysis.yml [--input FILE.root ...] [--output DIR]
 ```
 
-Output goes to `output/<case>/<species>/`: a `manifest.json` and one Parquet file per pT bin (12 features with O2 names and order, `pt`, `charge`, `label`, `is_test`).
+Output goes to `output/<case>/<species>/`: a `manifest.json` and one Parquet file per pT bin (12 features with O2 names and order, `pt`, `charge`, `label`, `is_test`, `fold`).
+
+`fold` is -1 for the test set and 0…K-1 for stratified folds of the training part. Use the folds (e.g. `fold == 0`) for validation, tuning and choosing thresholds; use the test set only for the final measurement.
 
 ```python
 from cascml.data import read_manifest, read_sample
@@ -26,7 +28,7 @@ from cascml.data import read_manifest, read_sample
 m = read_manifest("output/xi_test_hyperloop/xi")
 for entry in m["bins"]:
     df, meta = read_sample(entry["file"], m["sample_hash"])
-    train, test = df[~df.is_test], df[df.is_test]
+    train, val, test = df[df.fold > 0], df[df.fold == 0], df[df.fold == -1]
 ```
 
 ## Tests

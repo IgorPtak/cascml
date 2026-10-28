@@ -56,6 +56,8 @@ def test_valid_config_passes(cfg):
         ),
         pytest.param(lambda c: c["split"].update(test_size=1.0), r"split\.test_size", id="test-size-one"),
         pytest.param(lambda c: c["split"].update(test_size="0.3"), r"split\.test_size", id="test-size-str"),
+        pytest.param(lambda c: c["split"].pop("n_folds"), r"split\.n_folds", id="n-folds-missing"),
+        pytest.param(lambda c: c["split"].update(n_folds=1), "at least 2", id="n-folds-one"),
         pytest.param(lambda c: c["guards"].update(min_signal_test=0), "min_signal_test", id="guard-zero"),
         pytest.param(lambda c: c["guards"].update(min_signal_train=True), "min_signal_train", id="guard-bool"),
         pytest.param(lambda c: c["validation"]["bootstrap"].update(n=0), r"bootstrap\.n", id="bootstrap-n"),

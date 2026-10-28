@@ -10,11 +10,11 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import uproot
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import StratifiedKFold, train_test_split
 
 # Key under which cascml stores its metadata in the Parquet schema.
 PARQUET_META_KEY = b"cascml"
-SAMPLE_COLUMNS_EXTRA = ("pt", "charge", "label", "is_test")
+SAMPLE_COLUMNS_EXTRA = ("pt", "charge", "label", "is_test", "fold")
 
 
 class DataError(Exception):
@@ -114,18 +114,33 @@ def assign_pt_bins(df, edges):
     return df[inside].assign(pt_bin=idx[inside].astype(np.int8)).reset_index(drop=True)
 
 
-def split_train_test(df, test_size, random_state):
-    """Add `is_test`, stratified by label separately in every pT bin."""
-    is_test = np.zeros(len(df), dtype=bool)
+def split_train_test(df, test_size, n_folds, random_state):
+    """Add `is_test` and `fold`, stratified by label separately in every pT bin.
+
+    Test candidates get fold -1; the rest is split into folds 0..n_folds-1 for validation / cross-validation.
+    """
+    # Series aligned on df.index, so the result does not depend on how the rows are numbered.
+    is_test = pd.Series(False, index=df.index)
+    fold = pd.Series(-1, index=df.index, dtype=np.int8)
     for b, group in df.groupby("pt_bin"):
         counts = group["label"].value_counts()
-        if len(counts) < 2 or counts.min() < 2:
-            raise DataError(f"pT bin {b}: need >= 2 signal and >= 2 background candidates to split, got {counts.to_dict()}")
-        _, test_idx = train_test_split(
-            group.index, test_size=test_size, random_state=random_state, stratify=group["label"]
-        )
+        if len(counts) < 2:
+            raise DataError(f"pT bin {b}: need both signal and background to split, got {counts.to_dict()}")
+        try:
+            train_idx, test_idx = train_test_split(
+                group.index, test_size=test_size, random_state=random_state, stratify=group["label"]
+            )
+            labels = group.loc[train_idx, "label"]
+            if labels.value_counts().min() < n_folds:
+                # scikit-learn only warns here and would produce folds without signal.
+                raise ValueError(f"training part has {labels.value_counts().to_dict()}, fewer than {n_folds} per class")
+            folds = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=random_state)
+            for k, (_, val_pos) in enumerate(folds.split(train_idx, labels)):
+                fold[train_idx[val_pos]] = k
+        except ValueError as err:
+            raise DataError(f"pT bin {b}: too few candidates to split ({counts.to_dict()}): {err}") from err
         is_test[test_idx] = True
-    return df.assign(is_test=is_test)
+    return df.assign(is_test=is_test, fold=fold)
 
 
 def check_guards(df, edges, guards, species):
@@ -143,10 +158,11 @@ def check_guards(df, edges, guards, species):
 
 
 def prepare_species(trees, cfg, species):
-    """Full sample for `species`: selection, O2 features, pT bins, train/test split, statistics guards."""
+    """Full sample for `species`: selection, O2 features, pT bins, train/test/fold split, statistics guards."""
     edges = cfg["species"][species]["pt_bins"]
+    split = cfg["split"]
     df = assign_pt_bins(load_species(trees, cfg, species), edges)
-    df = split_train_test(df, cfg["split"]["test_size"], cfg["split"]["random_state"])
+    df = split_train_test(df, split["test_size"], split["n_folds"], split["random_state"])
     check_guards(df, edges, cfg["guards"], species)
     return df
 
@@ -206,6 +222,7 @@ def _counts(part):
         "n_train_bkg": int((~signal & ~part["is_test"]).sum()),
         "n_test_signal": int((signal & part["is_test"]).sum()),
         "n_test_bkg": int((~signal & part["is_test"]).sum()),
+        "n_signal_per_fold": [int((signal & (part["fold"] == k)).sum()) for k in sorted(part["fold"].unique()) if k >= 0],
     }
 
 

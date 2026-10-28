@@ -217,7 +217,7 @@ def binned():
 
 
 def test_split_is_stratified_per_bin(binned):
-    out = split_train_test(binned, 0.3, 42)
+    out = split_train_test(binned, 0.3, 5, 42)
     for _, group in out.groupby("pt_bin"):
         assert abs(group["is_test"].mean() - 0.3) < 0.01
         sig_frac_train = group.loc[~group["is_test"], "label"].mean()
@@ -225,16 +225,46 @@ def test_split_is_stratified_per_bin(binned):
         assert abs(sig_frac_train - sig_frac_test) < 0.01
 
 
+def test_folds_cover_training_part_only(binned):
+    out = split_train_test(binned, 0.3, 5, 42)
+    assert (out.loc[out["is_test"], "fold"] == -1).all()
+    assert set(out.loc[~out["is_test"], "fold"]) == {0, 1, 2, 3, 4}
+
+
+def test_folds_are_balanced_and_stratified(binned):
+    out = split_train_test(binned, 0.3, 5, 42)
+    for _, group in out[~out["is_test"]].groupby("pt_bin"):
+        sizes = group["fold"].value_counts()
+        assert sizes.max() - sizes.min() <= 1
+        sig_frac = group.groupby("fold")["label"].mean()
+        assert sig_frac.max() - sig_frac.min() < 0.02
+
+
 def test_split_is_reproducible(binned):
-    a = split_train_test(binned, 0.3, 42)["is_test"]
-    b = split_train_test(binned, 0.3, 42)["is_test"]
-    assert (a == b).all()
+    a = split_train_test(binned, 0.3, 5, 42)
+    b = split_train_test(binned, 0.3, 5, 42)
+    assert (a["is_test"] == b["is_test"]).all() and (a["fold"] == b["fold"]).all()
+
+
+def test_split_does_not_depend_on_row_numbering(binned):
+    # Same rows with a non-contiguous index must get the same split, row by row.
+    shifted = binned.set_index(binned.index * 3 + 7)
+    a = split_train_test(binned, 0.3, 5, 42)
+    b = split_train_test(shifted, 0.3, 5, 42)
+    assert (a["is_test"].to_numpy() == b["is_test"].to_numpy()).all()
+    assert (a["fold"].to_numpy() == b["fold"].to_numpy()).all()
 
 
 def test_split_rejects_bin_without_both_classes():
     df = pd.DataFrame({"pt_bin": np.zeros(10, dtype=np.int8), "label": np.zeros(10, dtype=np.int8)})
     with pytest.raises(DataError, match="pT bin 0"):
-        split_train_test(df, 0.3, 42)
+        split_train_test(df, 0.3, 5, 42)
+
+
+def test_split_rejects_bin_too_small_for_folds():
+    df = pd.DataFrame({"pt_bin": np.zeros(10, dtype=np.int8), "label": np.array([1] * 3 + [0] * 7, dtype=np.int8)})
+    with pytest.raises(DataError, match="too few candidates"):
+        split_train_test(df, 0.3, 5, 42)
 
 
 GUARDS = {"min_signal_train": 5, "min_signal_test": 2}
@@ -266,6 +296,7 @@ def test_hyperloop_xi_prepared(hyperloop_file, cfg):
     assert len(out) == 12017
     assert out.groupby("pt_bin")["label"].sum().tolist() == [1825, 2936, 682]
     assert abs(out["is_test"].mean() - 0.3) < 0.01
+    assert set(out["fold"]) == {-1, 0, 1, 2, 3, 4}
 
 
 @pytest.fixture
@@ -279,6 +310,7 @@ def prepared(cfg):
         charge=np.tile(np.array([-1, 1], dtype=np.int8), n_bins),
         label=np.tile(np.array([1, 0], dtype=np.int8), n_bins),
         is_test=np.tile([False, True], n_bins),
+        fold=np.tile(np.array([0, -1], dtype=np.int8), n_bins),
         pt_bin=np.repeat(np.arange(n_bins, dtype=np.int8), 2),
     )
 
@@ -290,16 +322,22 @@ def test_samples_roundtrip(prepared, cfg, tmp_path):
     manifest = read_manifest(write_samples(prepared, cfg, "xi", INPUTS, tmp_path).parent)
     assert [b["file"].parent.parent.name for b in manifest["bins"]] == ["pt_0.5_1.5", "pt_1.5_3", "pt_3_10"]
     df, meta = read_sample(manifest["bins"][0]["file"], manifest["sample_hash"])
-    # Contract with other models: O2 feature order, then pt, charge, label, is_test; no pt_bin.
-    assert list(df.columns) == list(cfg["features"]) + ["pt", "charge", "label", "is_test"]
-    assert df["cascradius"].dtype == np.float32 and df["label"].dtype == np.int8
+    # Contract with other models: O2 feature order, then pt, charge, label, is_test, fold; no pt_bin.
+    assert list(df.columns) == list(cfg["features"]) + ["pt", "charge", "label", "is_test", "fold"]
+    assert df["cascradius"].dtype == np.float32 and df["label"].dtype == np.int8 and df["fold"].dtype == np.int8
     assert (meta["pt_lo"], meta["pt_hi"], meta["input_files"]) == (0.5, 1.5, INPUTS)
 
 
 def test_manifest_counts(prepared, cfg, tmp_path):
     manifest = read_manifest(write_samples(prepared, cfg, "xi", INPUTS, tmp_path).parent)
     counts = {k: v for k, v in manifest["bins"][0].items() if k.startswith("n_")}
-    assert counts == {"n_train_signal": 1, "n_train_bkg": 0, "n_test_signal": 0, "n_test_bkg": 1}
+    assert counts == {
+        "n_train_signal": 1,
+        "n_train_bkg": 0,
+        "n_test_signal": 0,
+        "n_test_bkg": 1,
+        "n_signal_per_fold": [1],
+    }
 
 
 def test_hash_depends_on_config_and_inputs(cfg):
