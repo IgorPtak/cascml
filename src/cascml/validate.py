@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+from sklearn.metrics import roc_auc_score
 
 # Key under which cascml stores score-file metadata in the Parquet schema.
 SCORES_META_KEY = b"cascml_scores"
@@ -64,3 +65,26 @@ def attach_scores(sample, scores, scores_meta, sample_hash):
     if missing.any():
         raise ValidationError(f"{missing.sum()} sample candidates are without a score, e.g. cand_id {sample['cand_id'][missing].iloc[0]}")
     return sample.merge(scores[["cand_id", "score"]], on="cand_id", how="left", validate="one_to_one")
+
+
+def roc_auc(label, score):
+    """Area under the ROC curve; label 1 = signal. Raise ValidationError if a class is missing."""
+    label = np.asarray(label)
+    n_signal = int((label == 1).sum())
+    n_bkg = int((label == 0).sum())
+    if n_signal == 0 or n_bkg == 0:
+        raise ValidationError(f"AUC needs both classes, got {n_signal} signal and {n_bkg} background")
+    return float(roc_auc_score(label, score))
+
+
+def auc_table(df, by):
+    """AUC and class counts for every group of `df` defined by the columns `by`"""
+    rows = []
+    for key, group in df.groupby(list(by), sort=True):
+        rows.append({
+            **dict(zip(by, key)),
+            "n_signal": int((group["label"] == 1).sum()),
+            "n_bkg": int((group["label"] == 0).sum()),
+            "auc": roc_auc(group["label"], group["score"]),
+        })
+    return pd.DataFrame(rows)
