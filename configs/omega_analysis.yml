@@ -1,0 +1,72 @@
+case: omega_final
+
+input:
+  files:
+  - ../../data/AO2D_final.root 
+  df_prefix: DF_
+  tree: O2camlcandidates
+  step_size: 100 MB
+
+features:
+  cascradius:          {column: fCascRadius}
+  v0radius:            {column: fV0radius}
+  casccosPA:           {column: fCascPA, transform: cos}
+  v0cosPA:             {column: fV0PA,   transform: cos}
+  dcapostopv:          {column: fDCApostopv}
+  dcanegtopv:          {column: fDCAnegtopv}
+  dcabachtopv:         {column: fDCAbachtopv}
+  dcacascdaughters:    {column: fDCACascDaughters}
+  dcaV0daughters:      {column: fDCAV0daughters}
+  dcav0topv:           {column: fDCAv0topv}
+  bachBaryonCosPA:     {column: fBachBaryonCosPA}
+  bachBaryonDCAxyToPV: {column: fBachBaryonDCAxyToPV}
+
+species:
+  omega:
+    mass_window_bit: 1
+    signal_flags: {minus: fIsOmegaMinus, plus: fIsOmegaPlus}
+    split_by_charge: false                               
+    pt_bins: [0.5, 1.5, 3.0, 10.0]
+
+
+classes:
+  - {name: bkg, source: mc}
+  - {name: signal, source: mc}
+
+preselection: []
+
+tree_creator_cuts:
+  getXiMinus: false
+  getXiPlus: false
+  getOmegaMinus: false
+  getOmegaPlus: false
+  xiMassWindow: 0.06
+  omegaMassWindow: 0.06
+  v0setting_cospa: 0.9
+  v0setting_dcav0dau: 2.0
+  v0setting_dcapostopv: 0.05
+  v0setting_dcanegtopv: 0.05
+  v0setting_radius: 0.9
+  cascadesetting_cospa: 0.9
+  cascadesetting_dcacascdau: 2.0
+  cascadesetting_dcabachtopv: 0.05
+  cascadesetting_cascradius: 0.5
+  cascadesetting_v0masswindow: 0.02
+  cascadesetting_mindcav0topv: 0.0
+
+split:
+  test_size: 0.3
+  n_folds: 5
+  random_state: 42
+
+guards:
+  min_signal_train: 200
+  min_signal_test: 50
+
+validation:
+  bootstrap: {n: 1000, ci: 0.95}
+  working_points: [0.7, 0.8, 0.9]
+
+export:
+  onnx_dir_name: onnx
+  o2_json: cascademlselection_config.json
