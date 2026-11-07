@@ -2,7 +2,15 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from cascml.validate import ValidationError, attach_scores, read_scores, scores_path, write_scores
+from cascml.validate import (
+    ValidationError,
+    attach_scores,
+    auc_table,
+    read_scores,
+    roc_auc,
+    scores_path,
+    write_scores,
+)
 
 HASH = "abc123"
 
@@ -61,3 +69,46 @@ def test_attach_scores_rejects_other_sample_hash(sample):
 def test_attach_scores_rejects_bad_scores(sample, corrupt, message):
     with pytest.raises(ValidationError, match=message):
         attach_scores(sample, corrupt(good_scores(sample)), {"sample_hash": HASH}, HASH)
+
+
+def test_roc_auc_hand_computed():
+    assert roc_auc([0, 0, 1, 1], [0.1, 0.4, 0.35, 0.8]) == pytest.approx(0.75)
+
+
+@pytest.mark.parametrize("score, expected", [
+    ([0.1, 0.2, 0.8, 0.9], 1.0),
+    ([0.9, 0.8, 0.2, 0.1], 0.0),
+    ([0.5, 0.5, 0.5, 0.5], 0.5),
+], ids=["perfect", "inverted", "constant"])
+def test_roc_auc_limits(score, expected):
+    assert roc_auc([0, 0, 1, 1], score) == pytest.approx(expected)
+
+
+def test_roc_auc_random_score_is_near_half():
+    rng = np.random.default_rng(1)
+    label = rng.integers(0, 2, size=20_000)
+    assert roc_auc(label, rng.random(20_000)) == pytest.approx(0.5, abs=0.02)
+
+
+def test_roc_auc_depends_only_on_order():
+    label = [0, 1, 0, 1, 1, 0]
+    score = np.array([0.2, 0.7, 0.4, 0.9, 0.3, 0.1])
+    assert roc_auc(label, score) == pytest.approx(roc_auc(label, np.log(score) * 100 - 7))
+
+
+def test_roc_auc_rejects_single_class():
+    with pytest.raises(ValidationError, match="both classes"):
+        roc_auc([1, 1, 1], [0.2, 0.5, 0.9])
+
+
+def test_auc_table_per_bin():
+    df = pd.DataFrame({
+        "pt_bin": [0, 0, 0, 1, 1, 1, 1],
+        "label":  [0, 1, 1, 0, 0, 1, 1],
+        "score":  [0.1, 0.8, 0.9, 0.9, 0.8, 0.2, 0.1],
+    })
+    table = auc_table(df, by=["pt_bin"])
+    assert list(table["pt_bin"]) == [0, 1]
+    assert list(table["n_signal"]) == [2, 2]
+    assert list(table["n_bkg"]) == [1, 2]
+    assert list(table["auc"]) == pytest.approx([1.0, 0.0])
