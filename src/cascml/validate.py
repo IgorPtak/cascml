@@ -77,14 +77,42 @@ def roc_auc(label, score):
     return float(roc_auc_score(label, score))
 
 
-def auc_table(df, by):
-    """AUC and class counts for every group of `df` defined by the columns `by`"""
+def auc_table(df, by, n_boot=0, ci=0.95, seed=0):
+    """AUC and class counts for every group of `df` defined by the columns `by`.
+
+    With n_boot > 0 also the bootstrap confidence interval (columns auc_lo, auc_hi).
+    """
     rows = []
     for key, group in df.groupby(list(by), sort=True):
-        rows.append({
+        row = {
             **dict(zip(by, key)),
             "n_signal": int((group["label"] == 1).sum()),
             "n_bkg": int((group["label"] == 0).sum()),
-            "auc": roc_auc(group["label"], group["score"]),
-        })
+        }
+        if n_boot > 0:
+            row["auc"], row["auc_lo"], row["auc_hi"] = bootstrap_auc(group["label"], group["score"], n_boot, ci, seed)
+        else:
+            row["auc"] = roc_auc(group["label"], group["score"])
+        rows.append(row)
     return pd.DataFrame(rows)
+
+
+def bootstrap_auc(label, score, n_boot, ci, seed=0):
+    """AUC with a percentile bootstrap confidence interval; return (auc, lo, hi).
+
+    Signal and background are resampled separately, so every replica keeps the class counts.
+    """
+    label = np.asarray(label)
+    score = np.asarray(score, dtype=np.float64)
+    auc = roc_auc(label, score)
+    sig = np.flatnonzero(label == 1)
+    bkg = np.flatnonzero(label == 0)
+    rng = np.random.default_rng(seed)
+    replicas = np.empty(n_boot)
+    for i in range(n_boot):
+        idx = np.concatenate([rng.choice(sig, size=sig.size), rng.choice(bkg, size=bkg.size)])
+        replicas[i] = roc_auc_score(label[idx], score[idx])
+    alpha = (1.0 - ci) / 2.0
+    lo, hi = np.quantile(replicas, [alpha, 1.0 - alpha])
+    return auc, float(lo), float(hi)
+

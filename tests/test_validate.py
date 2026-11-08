@@ -6,10 +6,11 @@ from cascml.validate import (
     ValidationError,
     attach_scores,
     auc_table,
+    bootstrap_auc,
     read_scores,
     roc_auc,
     scores_path,
-    write_scores,
+    write_scores
 )
 
 HASH = "abc123"
@@ -112,3 +113,61 @@ def test_auc_table_per_bin():
     assert list(table["n_signal"]) == [2, 2]
     assert list(table["n_bkg"]) == [1, 2]
     assert list(table["auc"]) == pytest.approx([1.0, 0.0])
+
+
+def random_case(n, seed):
+    rng = np.random.default_rng(seed)
+    return rng.integers(0, 2, size=n), rng.random(n)
+
+
+def test_bootstrap_interval_contains_estimate():
+    label, score = random_case(2000, 1)
+    auc, lo, hi = bootstrap_auc(label, score + 0.3 * label, n_boot=200, ci=0.95)
+    assert lo < auc < hi
+
+
+def test_bootstrap_coverage_for_random_classifier():
+    rng = np.random.default_rng(10)
+    n_repeats = 100
+    hits = 0
+    for r in range(n_repeats):
+        label = rng.integers(0, 2, size=200)
+        _, lo, hi = bootstrap_auc(label, rng.random(200), n_boot=100, ci=0.95, seed=r)
+        hits += lo <= 0.5 <= hi
+    assert 0.88 <= hits / n_repeats <= 1.0
+
+
+def test_bootstrap_interval_shrinks_with_statistics():
+    widths = []
+    for n in (1000, 4000):
+        label, score = random_case(n, 3)
+        _, lo, hi = bootstrap_auc(label, score + 0.3 * label, n_boot=200, ci=0.95)
+        widths.append(hi - lo)
+    assert widths[1] == pytest.approx(widths[0] / 2, rel=0.3)
+
+
+def test_bootstrap_perfect_classifier_has_no_spread():
+    assert bootstrap_auc([0, 0, 1, 1], [0.1, 0.2, 0.8, 0.9], n_boot=50, ci=0.95) == (1.0, 1.0, 1.0)
+
+
+def test_bootstrap_is_reproducible():
+    label, score = random_case(500, 4)
+    assert bootstrap_auc(label, score, 100, 0.95, seed=7) == bootstrap_auc(label, score, 100, 0.95, seed=7)
+
+
+def test_auc_table_with_bootstrap_adds_interval():
+    rng = np.random.default_rng(5)
+    df = pd.DataFrame({
+        "pt_bin": np.repeat([0, 1], 500),
+        "label": rng.integers(0, 2, size=1000),
+        "score": rng.random(1000),
+    })
+    table = auc_table(df, by=["pt_bin"], n_boot=50, ci=0.95)
+    assert list(table.columns) == ["pt_bin", "n_signal", "n_bkg", "auc", "auc_lo", "auc_hi"]
+    assert (table["auc_lo"] <= table["auc"]).all()
+    assert (table["auc"] <= table["auc_hi"]).all()
+
+
+def test_auc_table_without_bootstrap_has_no_interval():
+    df = pd.DataFrame({"pt_bin": [0, 0, 0, 0], "label": [0, 0, 1, 1], "score": [0.1, 0.4, 0.35, 0.8]})
+    assert list(auc_table(df, by=["pt_bin"]).columns) == ["pt_bin", "n_signal", "n_bkg", "auc"]
