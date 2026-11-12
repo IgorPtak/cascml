@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 
 from cascml.validate import (
+    SENTINEL_THRESHOLD,
     ValidationError,
     attach_scores,
     auc_table,
@@ -12,6 +13,7 @@ from cascml.validate import (
     read_scores,
     roc_auc,
     scores_path,
+    sentinel_table,
     thresholds_for_efficiency,
     write_scores
 )
@@ -300,3 +302,34 @@ def test_ks_rejects_group_without_test_candidates():
     df.loc[df["label"] == 1, "fold"] = 1
     with pytest.raises(ValidationError, match="need both"):
         ks_train_test(df, by=["pt_bin"])
+
+
+def test_sentinel_table_counts_per_group_and_class():
+    df = pd.DataFrame({
+        "pt_bin": [0, 0, 0, 0, 1, 1],
+        "label":  [1, 1, 0, 0, 1, 0],
+        "a":      [1000.0, 0.5, 1000.0, 1000.0, 0.1, 0.2],
+        "b":      [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+    })
+    table = sentinel_table(df, ["a", "b"], by=["pt_bin"])
+    assert list(table.columns) == ["pt_bin", "class", "feature", "n", "n_sentinel", "fraction"]
+    a = table[table["feature"] == "a"].set_index(["pt_bin", "class"])
+    assert a.loc[(0, "signal"), "n_sentinel"] == 1
+    assert a.loc[(0, "signal"), "fraction"] == pytest.approx(0.5)
+    assert a.loc[(0, "bkg"), "n_sentinel"] == 2
+    assert a.loc[(1, "signal"), "n_sentinel"] == 0
+    assert (table.loc[table["feature"] == "b", "n_sentinel"] == 0).all()
+    assert len(table) == 2 * 2 * 2
+
+
+@pytest.mark.parametrize("value, counted", [
+    (999.0, True), (998.9, False), (-1000.0, True), (1e6, True), (0.0, False),
+], ids=["at-threshold", "below", "negative", "huge", "zero"])
+def test_sentinel_threshold_boundary(value, counted):
+    df = pd.DataFrame({"pt_bin": [0, 0], "label": [1, 0], "a": [value, 0.0]})
+    table = sentinel_table(df, ["a"], by=["pt_bin"])
+    assert table.loc[table["class"] == "signal", "n_sentinel"].iloc[0] == int(counted)
+
+
+def test_sentinel_threshold_value():
+    assert SENTINEL_THRESHOLD == 999.0

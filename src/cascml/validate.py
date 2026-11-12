@@ -12,6 +12,7 @@ from sklearn.metrics import roc_auc_score
 
 # Key under which cascml stores score-file metadata in the Parquet schema.
 SCORES_META_KEY = b"cascml_scores"
+SENTINEL_THRESHOLD = 999.0
 
 
 class ValidationError(Exception):
@@ -186,4 +187,23 @@ def ks_train_test(df, by):
                 "ks_stat": float(result.statistic),
                 "p_value": float(result.pvalue),
             })
+    return pd.DataFrame(rows)
+
+
+def sentinel_table(df, features, by, threshold=SENTINEL_THRESHOLD):
+    """Number and fraction of candidates with |feature| >= threshold, per group, for signal and background separately."""
+    rows = []
+    for key, group in df.groupby(list(by), sort=True):
+        for label, name in ((1, "signal"), (0, "bkg")):
+            cls = group[group["label"] == label]
+            for feature in features:
+                n_sentinel = int((cls[feature].abs() >= threshold).sum())
+                rows.append({
+                    **dict(zip(by, key)),
+                    "class": name,
+                    "feature": feature,
+                    "n": len(cls),
+                    "n_sentinel": n_sentinel,
+                    "fraction": n_sentinel / len(cls) if len(cls) > 0 else 0.0,
+                })
     return pd.DataFrame(rows)
