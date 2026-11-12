@@ -116,3 +116,51 @@ def bootstrap_auc(label, score, n_boot, ci, seed=0):
     lo, hi = np.quantile(replicas, [alpha, 1.0 - alpha])
     return auc, float(lo), float(hi)
 
+
+def thresholds_for_efficiency(df, by, targets):
+    """Score threshold that keeps at least each target fraction of signal, for every group of `df`."""
+    rows = []
+    for key, group in df.groupby(list(by), sort=True):
+        sig_scores = np.sort(group.loc[group["label"] == 1, "score"].to_numpy())[::-1]
+        if sig_scores.size == 0:
+            raise ValidationError(f"no signal in group {dict(zip(by, key))}, cannot set a threshold")
+        for target in targets:
+            # k-th highest signal score; the epsilon stops 0.55 * 100 = 55.00000000000001 from rounding up to 56
+            k = int(np.ceil(target * sig_scores.size - 1e-9))
+            rows.append({**dict(zip(by, key)), "target": target, "threshold": float(sig_scores[k - 1])})
+    return pd.DataFrame(rows)
+
+
+def efficiency_table(df, thresholds, by):
+    """Signal and background efficiency of `score >= threshold` for every group of `df` and every target.
+
+    `thresholds` comes from thresholds_for_efficiency; its group columns must be a subset of `by`,
+    e.g. thresholds per pT bin applied separately to each charge.
+    """
+    keys = [c for c in thresholds.columns if c not in ("target", "threshold")]
+    if not set(keys) <= set(by):
+        raise ValidationError(f"threshold columns {keys} must be a subset of the grouping columns {list(by)}")
+    merged = df.merge(thresholds, on=keys, how="inner")
+    merged["passed"] = merged["score"] >= merged["threshold"]
+    group_cols = list(by) + ["target"]
+    rows = []
+    for key, group in merged.groupby(group_cols, sort=True):
+        sig = group["label"] == 1
+        n_sig, n_bkg = int(sig.sum()), int((~sig).sum())
+        if n_sig == 0 or n_bkg == 0:
+            raise ValidationError(
+                f"group {dict(zip(group_cols, key))} has {n_sig} signal and {n_bkg} background, need both"
+            )
+        eff_sig = float(group.loc[sig, "passed"].mean())
+        eff_bkg = float(group.loc[~sig, "passed"].mean())
+        rows.append({
+            **dict(zip(group_cols, key)),
+            "threshold": float(group["threshold"].iloc[0]),
+            "n_signal": n_sig,
+            "n_bkg": n_bkg,
+            "eff_signal": eff_sig,
+            "eff_signal_err": float(np.sqrt(eff_sig * (1 - eff_sig) / n_sig)),
+            "eff_bkg": eff_bkg,
+            "eff_bkg_err": float(np.sqrt(eff_bkg * (1 - eff_bkg) / n_bkg)),
+        })
+    return pd.DataFrame(rows)
