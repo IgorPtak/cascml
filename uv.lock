@@ -132,6 +132,7 @@ dependencies = [
     { name = "pyarrow" },
     { name = "pyyaml" },
     { name = "scikit-learn" },
+    { name = "scipy" },
     { name = "uproot" },
     { name = "xgboost" },
 ]
@@ -152,6 +153,7 @@ requires-dist = [
     { name = "pyarrow", specifier = ">=26.0.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "scikit-learn", specifier = ">=1.9.1" },
+    { name = "scipy", specifier = ">=1.18.1" },
     { name = "uproot", specifier = ">=5.7.7" },
     { name = "xgboost", specifier = ">=3.4.1" },
 ]
