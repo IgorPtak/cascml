@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+from scipy.stats import ks_2samp
 from sklearn.metrics import roc_auc_score
 
 # Key under which cascml stores score-file metadata in the Parquet schema.
@@ -163,4 +164,26 @@ def efficiency_table(df, thresholds, by):
             "eff_bkg": eff_bkg,
             "eff_bkg_err": float(np.sqrt(eff_bkg * (1 - eff_bkg) / n_bkg)),
         })
+    return pd.DataFrame(rows)
+
+
+def ks_train_test(df, by):
+    """Two-sample KS test of the score: training folds (fold >= 1) vs test set, for signal and background separately."""
+    rows = []
+    for key, group in df.groupby(list(by), sort=True):
+        for label, name in ((1, "signal"), (0, "bkg")):
+            cls = group[group["label"] == label]
+            train = cls.loc[cls["fold"] >= 1, "score"].to_numpy()
+            test = cls.loc[cls["fold"] == -1, "score"].to_numpy()
+            if train.size == 0 or test.size == 0:
+                raise ValidationError(f"group {dict(zip(by, key))}, {name}: {train.size} train and {test.size} test candidates, need both")
+            result = ks_2samp(train, test)
+            rows.append({
+                **dict(zip(by, key)),
+                "class": name,
+                "n_train": int(train.size),
+                "n_test": int(test.size),
+                "ks_stat": float(result.statistic),
+                "p_value": float(result.pvalue),
+            })
     return pd.DataFrame(rows)

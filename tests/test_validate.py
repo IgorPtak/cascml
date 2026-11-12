@@ -8,6 +8,7 @@ from cascml.validate import (
     auc_table,
     bootstrap_auc,
     efficiency_table,
+    ks_train_test,
     read_scores,
     roc_auc,
     scores_path,
@@ -257,3 +258,45 @@ def test_threshold_from_validation_holds_on_independent_test():
     t = thresholds_for_efficiency(sample(20_000), by=["pt_bin"], targets=[0.8])
     row = efficiency_table(sample(20_000), t, by=["pt_bin"]).iloc[0]
     assert abs(row["eff_signal"] - 0.8) < 3 * row["eff_signal_err"] + 0.01
+
+
+def make_folds(rng, n, shift_train=0.0):
+    label = rng.integers(0, 2, size=n)
+    fold = rng.choice([-1, 0, 1, 2, 3, 4], size=n)
+    score = rng.normal(label, 1.0) + shift_train * (fold >= 1)
+    return pd.DataFrame({"pt_bin": 0, "label": label, "fold": fold, "score": score})
+
+
+def test_ks_table_columns_and_counts():
+    df = make_folds(np.random.default_rng(0), 3000)
+    table = ks_train_test(df, by=["pt_bin"])
+    assert list(table.columns) == ["pt_bin", "class", "n_train", "n_test", "ks_stat", "p_value"]
+    assert list(table["class"]) == ["signal", "bkg"]
+    sig = df[df["label"] == 1]
+    assert table["n_train"].iloc[0] == (sig["fold"] >= 1).sum()
+    assert table["n_test"].iloc[0] == (sig["fold"] == -1).sum()
+
+
+def test_ks_ignores_validation_fold():
+    df = make_folds(np.random.default_rng(1), 3000)
+    df.loc[df["fold"] == 0, "score"] += 100.0
+    assert ks_train_test(df, by=["pt_bin"])["ks_stat"].max() < 0.1
+
+
+def test_ks_detects_overtraining():
+    table = ks_train_test(make_folds(np.random.default_rng(2), 20_000, shift_train=0.3), by=["pt_bin"])
+    assert (table["p_value"] < 1e-6).all()
+
+
+def test_ks_p_values_are_uniform_without_overtraining():
+    rng = np.random.default_rng(3)
+    p = np.concatenate([ks_train_test(make_folds(rng, 600), by=["pt_bin"])["p_value"].to_numpy() for _ in range(200)])
+    assert 0.02 <= (p < 0.05).mean() <= 0.09
+    assert 0.40 <= (p < 0.5).mean() <= 0.60
+
+
+def test_ks_rejects_group_without_test_candidates():
+    df = make_folds(np.random.default_rng(4), 200)
+    df.loc[df["label"] == 1, "fold"] = 1
+    with pytest.raises(ValidationError, match="need both"):
+        ks_train_test(df, by=["pt_bin"])
