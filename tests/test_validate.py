@@ -7,9 +7,11 @@ from cascml.validate import (
     attach_scores,
     auc_table,
     bootstrap_auc,
+    efficiency_table,
     read_scores,
     roc_auc,
     scores_path,
+    thresholds_for_efficiency,
     write_scores
 )
 
@@ -171,3 +173,87 @@ def test_auc_table_with_bootstrap_adds_interval():
 def test_auc_table_without_bootstrap_has_no_interval():
     df = pd.DataFrame({"pt_bin": [0, 0, 0, 0], "label": [0, 0, 1, 1], "score": [0.1, 0.4, 0.35, 0.8]})
     assert list(auc_table(df, by=["pt_bin"]).columns) == ["pt_bin", "n_signal", "n_bkg", "auc"]
+
+
+def ten_signals_ten_bkg():
+    return pd.DataFrame({
+        "pt_bin": 0,
+        "label": [1] * 10 + [0] * 10,
+        "score": list(np.arange(1, 11) / 10) + list(np.arange(10) / 20),
+    })
+
+
+def test_threshold_keeps_target_fraction_of_signal():
+    t = thresholds_for_efficiency(ten_signals_ten_bkg(), by=["pt_bin"], targets=[0.7, 0.9])
+    assert list(t.columns) == ["pt_bin", "target", "threshold"]
+    assert list(t["threshold"]) == pytest.approx([0.4, 0.2])
+
+
+def test_threshold_with_ties_keeps_at_least_target():
+    df = pd.DataFrame({"pt_bin": 0, "label": [1, 1, 1, 1, 0], "score": [0.9, 0.5, 0.5, 0.5, 0.1]})
+    t = thresholds_for_efficiency(df, by=["pt_bin"], targets=[0.5])
+    eff = efficiency_table(df, t, by=["pt_bin"])
+    assert eff["eff_signal"].iloc[0] == 1.0
+
+
+def test_threshold_is_not_spoiled_by_float_rounding():
+    # 0.55 * 100 == 55.00000000000001 in floating point
+    df = pd.DataFrame({"pt_bin": 0, "label": 1, "score": np.arange(100) / 100})
+    t = thresholds_for_efficiency(df, by=["pt_bin"], targets=[0.55])
+    assert (df["score"] >= t["threshold"].iloc[0]).sum() == 55
+
+
+def test_threshold_rejects_group_without_signal():
+    df = pd.DataFrame({"pt_bin": [0, 0, 1], "label": [1, 0, 0], "score": [0.9, 0.1, 0.5]})
+    with pytest.raises(ValidationError, match="no signal"):
+        thresholds_for_efficiency(df, by=["pt_bin"], targets=[0.8])
+
+
+def test_efficiency_table_hand_computed():
+    df = ten_signals_ten_bkg()
+    t = thresholds_for_efficiency(df, by=["pt_bin"], targets=[0.7])
+    row = efficiency_table(df, t, by=["pt_bin"]).iloc[0]
+    assert row["eff_signal"] == pytest.approx(0.7)
+    assert row["eff_bkg"] == pytest.approx(0.2)
+    assert row["eff_signal_err"] == pytest.approx(np.sqrt(0.7 * 0.3 / 10))
+    assert (row["n_signal"], row["n_bkg"]) == (10, 10)
+
+
+def test_efficiency_table_per_charge_with_thresholds_per_bin():
+    df = pd.DataFrame({
+        "pt_bin": 0,
+        "charge": [-1, -1, -1, -1, 1, 1, 1, 1],
+        "label":  [1, 1, 0, 0, 1, 1, 0, 0],
+        "score":  [0.9, 0.8, 0.1, 0.2, 0.9, 0.3, 0.1, 0.6],
+    })
+    t = pd.DataFrame({"pt_bin": [0], "target": [0.8], "threshold": [0.5]})
+    eff = efficiency_table(df, t, by=["pt_bin", "charge"])
+    assert list(eff["charge"]) == [-1, 1]
+    assert list(eff["eff_signal"]) == pytest.approx([1.0, 0.5])
+    assert list(eff["eff_bkg"]) == pytest.approx([0.0, 0.5])
+
+
+def test_efficiency_table_rejects_threshold_keys_outside_grouping():
+    df = ten_signals_ten_bkg().assign(charge=1)
+    t = thresholds_for_efficiency(df, by=["pt_bin", "charge"], targets=[0.8])
+    with pytest.raises(ValidationError, match="subset"):
+        efficiency_table(df, t, by=["pt_bin"])
+
+
+def test_efficiency_table_rejects_group_without_a_class():
+    df = pd.DataFrame({"pt_bin": 0, "charge": [-1, -1, 1], "label": [1, 0, 0], "score": [0.9, 0.1, 0.5]})
+    t = pd.DataFrame({"pt_bin": [0], "target": [0.8], "threshold": [0.5]})
+    with pytest.raises(ValidationError, match="need both"):
+        efficiency_table(df, t, by=["pt_bin", "charge"])
+
+
+def test_threshold_from_validation_holds_on_independent_test():
+    rng = np.random.default_rng(3)
+
+    def sample(n):
+        label = rng.integers(0, 2, size=n)
+        return pd.DataFrame({"pt_bin": 0, "label": label, "score": rng.normal(label, 1.0)})
+
+    t = thresholds_for_efficiency(sample(20_000), by=["pt_bin"], targets=[0.8])
+    row = efficiency_table(sample(20_000), t, by=["pt_bin"]).iloc[0]
+    assert abs(row["eff_signal"] - 0.8) < 3 * row["eff_signal_err"] + 0.01
