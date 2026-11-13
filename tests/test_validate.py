@@ -1,15 +1,21 @@
+import json
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
 
+from cascml.data import write_samples
 from cascml.validate import (
     SENTINEL_THRESHOLD,
     ValidationError,
     attach_scores,
     auc_table,
     bootstrap_auc,
+    compute_metrics,
     efficiency_table,
     ks_train_test,
+    load_validation_frame,
     read_scores,
     roc_auc,
     scores_path,
@@ -333,3 +339,70 @@ def test_sentinel_threshold_boundary(value, counted):
 
 def test_sentinel_threshold_value():
     assert SENTINEL_THRESHOLD == 999.0
+
+
+def make_prepared_sample(cfg, n_per_bin=400, seed=0):
+    """Synthetic sample in the cascml sample format, for the xi species of the test config."""
+    rng = np.random.default_rng(seed)
+    edges = cfg["species"]["xi"]["pt_bins"]
+    parts = []
+    for b in range(len(edges) - 1):
+        n = n_per_bin
+        part = pd.DataFrame({f: rng.normal(size=n).astype(np.float32) for f in cfg["features"]})
+        part["pt"] = rng.uniform(edges[b], edges[b + 1], size=n).astype(np.float32)
+        part["charge"] = rng.choice(np.array([-1, 1], dtype=np.int8), size=n)
+        part["label"] = np.tile(np.array([0, 1], dtype=np.int8), n // 2)
+        part["fold"] = np.repeat(np.array([-1, 0, 1, 2, 3, 4, -1, 1], dtype=np.int8), n // 8)
+        part["is_test"] = part["fold"] == -1
+        part["pt_bin"] = b
+        parts.append(part)
+    df = pd.concat(parts, ignore_index=True)
+    df["cand_id"] = np.arange(len(df), dtype=np.int64) * 3 + 7
+    return df
+
+
+@pytest.fixture
+def species_dir(cfg, tmp_path):
+    df = make_prepared_sample(cfg)
+    manifest_path = write_samples(df, cfg, "xi", [Path("/data/fake.root")], tmp_path)
+    return manifest_path.parent, df
+
+
+def test_load_validation_frame_joins_scores(species_dir):
+    sdir, df = species_dir
+    sample_hash = json.loads((sdir / "manifest.json").read_text())["sample_hash"]
+    write_scores(scores_path(sdir, "perfect"), df["cand_id"], df["label"], sample_hash, "perfect")
+    frame, manifest, meta = load_validation_frame(sdir, "perfect")
+    assert len(frame) == len(df)
+    assert sorted(frame["pt_bin"].unique()) == [0, 1, 2]
+    assert (frame["score"] == frame["label"]).all()
+    assert meta["model"] == "perfect"
+    assert manifest["sample_hash"] == sample_hash
+
+
+def test_load_validation_frame_without_scores(species_dir):
+    sdir, _ = species_dir
+    with pytest.raises(ValidationError, match="no scores for model 'missing'"):
+        load_validation_frame(sdir, "missing")
+
+
+def test_load_validation_frame_without_samples(tmp_path):
+    with pytest.raises(ValidationError, match="run cascml prepare"):
+        load_validation_frame(tmp_path / "nothing", "perfect")
+
+
+def test_compute_metrics_perfect_model_is_json_ready(species_dir, cfg):
+    sdir, df = species_dir
+    sample_hash = json.loads((sdir / "manifest.json").read_text())["sample_hash"]
+    score = df["label"] + 0.1 * df["pt"]
+    write_scores(scores_path(sdir, "perfect"), df["cand_id"], score, sample_hash, "perfect")
+    frame, _, _ = load_validation_frame(sdir, "perfect")
+    metrics = compute_metrics(frame, list(cfg["features"]), n_boot=20, ci=0.95, working_points=[0.8])
+    assert set(metrics) == {
+        "auc_test", "auc_test_by_charge", "auc_train", "working_points_test",
+        "working_points_test_by_charge", "ks_train_test", "sentinels",
+    }
+    assert [row["auc"] for row in metrics["auc_test"]] == pytest.approx([1.0, 1.0, 1.0])
+    assert len(metrics["auc_test_by_charge"]) == 6
+    assert all(row["eff_bkg"] == 0.0 for row in metrics["working_points_test"])
+    json.dumps(metrics)
