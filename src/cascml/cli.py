@@ -7,6 +7,7 @@ from pathlib import Path
 import yaml
 
 from cascml.data import DataError, list_trees, prepare_species, resolve_inputs, write_samples
+from cascml.validate import ValidationError, validate_model
 
 
 class ConfigError(Exception):
@@ -156,7 +157,7 @@ def run_prepare(args):
         input_files = resolve_inputs(cfg["input"]["files"], Path(args.config).parent)
     trees = list_trees(input_files, cfg["input"]["df_prefix"], cfg["input"]["tree"])
     samples = {sp_name: prepare_species(trees, cfg, sp_name) for sp_name in cfg["species"]}
-    output_root = Path(args.output) if args.output else Path(args.config).resolve().parent.parent / "output"
+    output_root = _output_root(args)
     manifests = {
         sp_name: write_samples(df, cfg, sp_name, input_files, output_root) for sp_name, df in samples.items()
     }
@@ -177,6 +178,25 @@ def run_prepare(args):
                 f"test sig/bkg {int(test['label'].sum())}/{int((test['label'] == 0).sum())}"
             )
         print(f"  samples: {manifests[sp_name]}")
+    return 0
+
+
+def run_validate(args):
+    """`cascml validate`: metrics of one model for every species, from its score files."""
+    cfg = load_yaml(args.config)
+    validate_analysis(cfg)
+    output_root = _output_root(args)
+    for sp_name in cfg["species"]:
+        path, doc = validate_model(output_root / cfg["case"] / sp_name, args.model, cfg)
+        print(f"species {sp_name}, model {args.model}: {path}")
+        edges = doc["pt_bins"]
+        for row in doc["auc_test"]:
+            b = row["pt_bin"]
+            print(
+                f"  pT [{edges[b]}, {edges[b + 1]}): test AUC {row['auc']:.3f} "
+                f"[{row['auc_lo']:.3f}, {row['auc_hi']:.3f}], "
+                f"{row['n_signal']} signal / {row['n_bkg']} bkg"
+            )
     return 0
 
 
@@ -203,26 +223,40 @@ def _require_positive_int(value, where):
         raise ConfigError(f"{where} must be a positive integer, got {value!r}")
 
 
+def _output_root(args):
+    """--output if given, else output/ next to the directory containing the config."""
+    return Path(args.output) if args.output else Path(args.config).resolve().parent.parent / "output"
+
+
 def main(argv=None):
     """Entry point for the `cascml` command."""
     parser = argparse.ArgumentParser(prog="cascml", description="Train BDT models for cascademlselection in O2.")
     commands = parser.add_subparsers(dest="command", required=True)
 
-    prepare = commands.add_parser("prepare", help="build Parquet samples from AO2D files")
-    prepare.add_argument("-c", "--config", required=True, help="analysis config (YAML)")
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("-c", "--config", required=True, help="analysis config (YAML)")
+    common.add_argument(
+        "--output",
+        help="output root directory; default: output/ next to the directory containing the config",
+    )
+
+    prepare = commands.add_parser("prepare", parents=[common], help="build Parquet samples from AO2D files")
     prepare.add_argument(
         "--input", nargs="+", metavar="FILE",
         help="override input.files from the config (paths relative to the current directory)",
     )
-    prepare.add_argument(
-        "--output",
-        help="output root directory; default: output/ next to the directory containing the config",
-    )
     prepare.set_defaults(func=run_prepare)
+
+    validate = commands.add_parser("validate", parents=[common], help="compute validation metrics of one model")
+    validate.add_argument(
+        "--model", required=True,
+        help="model name; scores are read from <output>/<case>/<species>/models/<model>/scores.parquet",
+    )
+    validate.set_defaults(func=run_validate)
 
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except (ConfigError, DataError) as err:
+    except (ConfigError, DataError, ValidationError) as err:
         print(f"cascml: {err}", file=sys.stderr)
         return 1

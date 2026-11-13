@@ -248,3 +248,27 @@ def compute_metrics(df, features, n_boot, ci, working_points, seed=0):
         "sentinels": sentinel_table(df, features, ["pt_bin"]),
     }
     return {name: table.to_dict(orient="records") for name, table in tables.items()}
+
+
+def validate_model(species_dir, model_name, cfg):
+    """Compute all metrics of one model and write models/<model>/metrics.json; return (path, document)."""
+    frame, manifest, scores_meta = load_validation_frame(species_dir, model_name)
+    val = cfg["validation"]
+    seed = cfg["split"]["random_state"]
+    metrics = compute_metrics(
+        frame, manifest["features"], val["bootstrap"]["n"], val["bootstrap"]["ci"],
+        val["working_points"], seed=seed,
+    )
+    doc = {
+        "model": scores_meta["model"],
+        "case": manifest["case"],
+        "species": manifest["species"],
+        "sample_hash": manifest["sample_hash"],
+        "pt_bins": manifest["pt_bins"],
+        "bootstrap": {"n": val["bootstrap"]["n"], "ci": val["bootstrap"]["ci"], "seed": seed},
+        "working_points": val["working_points"],
+        **metrics,
+    }
+    path = scores_path(species_dir, model_name).with_name("metrics.json")
+    path.write_text(json.dumps(doc, indent=2) + "\n")
+    return path, doc

@@ -4,7 +4,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+import yaml
 
+from cascml.cli import main
 from cascml.data import write_samples
 from cascml.validate import (
     SENTINEL_THRESHOLD,
@@ -21,7 +23,8 @@ from cascml.validate import (
     scores_path,
     sentinel_table,
     thresholds_for_efficiency,
-    write_scores
+    write_scores,
+    validate_model
 )
 
 HASH = "abc123"
@@ -406,3 +409,36 @@ def test_compute_metrics_perfect_model_is_json_ready(species_dir, cfg):
     assert len(metrics["auc_test_by_charge"]) == 6
     assert all(row["eff_bkg"] == 0.0 for row in metrics["working_points_test"])
     json.dumps(metrics)
+
+
+def test_validate_model_writes_metrics_json(species_dir, cfg):
+    sdir, df = species_dir
+    sample_hash = json.loads((sdir / "manifest.json").read_text())["sample_hash"]
+    write_scores(scores_path(sdir, "perfect"), df["cand_id"], df["label"] + 0.1 * df["pt"], sample_hash, "perfect")
+    cfg["validation"]["bootstrap"]["n"] = 20
+    path, doc = validate_model(sdir, "perfect", cfg)
+    assert path == sdir / "models" / "perfect" / "metrics.json"
+    on_disk = json.loads(path.read_text())
+    assert on_disk == doc
+    assert on_disk["sample_hash"] == sample_hash
+    assert on_disk["bootstrap"] == {"n": 20, "ci": 0.95, "seed": cfg["split"]["random_state"]}
+    assert len(on_disk["auc_test"]) == len(cfg["species"]["xi"]["pt_bins"]) - 1
+
+
+def test_main_validate(species_dir, cfg, tmp_path, capsys):
+    sdir, df = species_dir
+    sample_hash = json.loads((sdir / "manifest.json").read_text())["sample_hash"]
+    write_scores(scores_path(sdir, "perfect"), df["cand_id"], df["label"] + 0.1 * df["pt"], sample_hash, "perfect")
+    cfg["validation"]["bootstrap"]["n"] = 20
+    config = tmp_path / "analysis.yml"
+    config.write_text(yaml.safe_dump(cfg))
+    assert main(["validate", "-c", str(config), "--output", str(tmp_path), "--model", "perfect"]) == 0
+    assert "test AUC 1.000" in capsys.readouterr().out
+    assert (sdir / "models" / "perfect" / "metrics.json").is_file()
+
+
+def test_main_validate_without_scores_returns_1(species_dir, cfg, tmp_path, capsys):
+    config = tmp_path / "analysis.yml"
+    config.write_text(yaml.safe_dump(cfg))
+    assert main(["validate", "-c", str(config), "--output", str(tmp_path), "--model", "missing"]) == 1
+    assert "no scores for model 'missing'" in capsys.readouterr().err
