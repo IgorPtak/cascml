@@ -10,6 +10,8 @@ import pyarrow.parquet as pq
 from scipy.stats import ks_2samp
 from sklearn.metrics import roc_auc_score
 
+from cascml.data import read_manifest, read_sample
+
 # Key under which cascml stores score-file metadata in the Parquet schema.
 SCORES_META_KEY = b"cascml_scores"
 SENTINEL_THRESHOLD = 999.0
@@ -207,3 +209,42 @@ def sentinel_table(df, features, by, threshold=SENTINEL_THRESHOLD):
                     "fraction": n_sentinel / len(cls) if len(cls) > 0 else 0.0,
                 })
     return pd.DataFrame(rows)
+
+
+def load_validation_frame(species_dir, model_name):
+    """All pT bins of one species with a pt_bin column and the model score joined by cand_id.
+
+    Return (frame, manifest, scores_meta).
+    """
+    species_dir = Path(species_dir)
+    if not (species_dir / "manifest.json").is_file():
+        raise ValidationError(f"no samples in {species_dir} (manifest.json missing); run cascml prepare first")
+    path = scores_path(species_dir, model_name)
+    if not path.is_file():
+        raise ValidationError(f"no scores for model '{model_name}': {path} does not exist")
+    manifest = read_manifest(species_dir)
+    parts = []
+    for b, entry in enumerate(manifest["bins"]):
+        sample, _ = read_sample(entry["file"], manifest["sample_hash"])
+        sample["pt_bin"] = b
+        parts.append(sample)
+    scores, scores_meta = read_scores(path)
+    frame = attach_scores(pd.concat(parts, ignore_index=True), scores, scores_meta, manifest["sample_hash"])
+    return frame, manifest, scores_meta
+
+
+def compute_metrics(df, features, n_boot, ci, working_points, seed=0):
+    """All validation metrics of one model; every table is a list of row dicts, ready for JSON."""
+    test = df[df["fold"] == -1]
+    train = df[df["fold"] >= 1]
+    thresholds = thresholds_for_efficiency(df[df["fold"] == 0], by=["pt_bin"], targets=working_points)
+    tables = {
+        "auc_test": auc_table(test, ["pt_bin"], n_boot, ci, seed),
+        "auc_test_by_charge": auc_table(test, ["pt_bin", "charge"], n_boot, ci, seed),
+        "auc_train": auc_table(train, ["pt_bin"]),
+        "working_points_test": efficiency_table(test, thresholds, ["pt_bin"]),
+        "working_points_test_by_charge": efficiency_table(test, thresholds, ["pt_bin", "charge"]),
+        "ks_train_test": ks_train_test(df, ["pt_bin"]),
+        "sentinels": sentinel_table(df, features, ["pt_bin"]),
+    }
+    return {name: table.to_dict(orient="records") for name, table in tables.items()}
