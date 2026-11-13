@@ -9,6 +9,7 @@ from cascml.data import (
     DataError,
     assign_pt_bins,
     check_guards,
+    downsample_background,
     list_trees,
     load_species,
     prepare_species,
@@ -20,6 +21,7 @@ from cascml.data import (
     select_species,
     split_train_test,
     to_model_frame,
+    uniform_from_id,
     write_samples,
 )
 
@@ -371,3 +373,39 @@ def test_sample_from_other_format_version_is_rejected(prepared, cfg, tmp_path, m
     monkeypatch.setattr("cascml.data.FORMAT_VERSION", 3)
     with pytest.raises(DataError, match="format version 2"):
         read_sample(manifest["bins"][0]["file"])
+
+
+def test_uniform_from_id_is_uniform_and_reproducible():
+    u = uniform_from_id(np.arange(200_000), seed=42)
+    assert 0.0 <= u.min() and u.max() < 1.0
+    assert np.histogram(u, bins=10, range=(0, 1))[0] == pytest.approx(np.full(10, 20_000), rel=0.03)
+    assert np.array_equal(u[1000:1100], uniform_from_id(np.arange(1000, 1100), seed=42))
+    assert not np.array_equal(u[:100], uniform_from_id(np.arange(100), seed=43))
+
+
+def test_downsample_keeps_all_signal_and_fraction_of_background():
+    n = 100_000
+    frame = pd.DataFrame({"label": np.tile(np.array([0, 0, 0, 1], dtype=np.int8), n // 4),
+                          "cand_id": np.arange(n, dtype=np.int64)})
+    out = downsample_background(frame, 0.2, seed=42)
+    assert (out["label"] == 1).sum() == n // 4
+    assert (out["label"] == 0).sum() / (3 * n // 4) == pytest.approx(0.2, abs=0.01)
+
+
+def test_downsample_is_nested_and_identity_at_one():
+    frame = pd.DataFrame({"label": np.zeros(10_000, dtype=np.int8), "cand_id": np.arange(10_000, dtype=np.int64)})
+    small = set(downsample_background(frame, 0.1, seed=1)["cand_id"])
+    large = set(downsample_background(frame, 0.2, seed=1)["cand_id"])
+    assert small < large
+    assert downsample_background(frame, 1.0, seed=1) is frame
+
+
+def test_load_species_downsampling_does_not_depend_on_chunking(make_ao2d, cfg):
+    rows = [{"fMassWindows": 1, "fIsXiMinus": i % 10 == 0} for i in range(2000)]
+    trees = list_trees([make_ao2d([rows[:700], rows[700:]])], "DF_", "O2camlcandidates")
+    cfg["species"]["xi"]["bkg_fraction"] = 0.3
+    ids = []
+    for step in ("1 kB", "100 MB"):
+        cfg["input"]["step_size"] = step
+        ids.append(list(load_species(trees, cfg, "xi")["cand_id"]))
+    assert ids[0] == ids[1]

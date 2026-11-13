@@ -108,3 +108,10 @@ def test_main_requires_command(capsys):
         main([])
     assert exc.value.code == 2
     assert "required: command" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("value", [0, 1.5, -0.1, True, "0.2"])
+def test_bkg_fraction_out_of_range(cfg, value):
+    cfg["species"]["xi"]["bkg_fraction"] = value
+    with pytest.raises(ConfigError, match="bkg_fraction"):
+        validate_analysis(cfg)

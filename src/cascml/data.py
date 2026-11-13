@@ -99,6 +99,33 @@ def to_model_frame(chunk, features):
     return pd.DataFrame(out)
 
 
+# splitmix64 constants (Steele, Lea, Flood 2014).
+_GOLDEN = np.uint64(0x9E3779B97F4A7C15)
+_MIX1 = np.uint64(0xBF58476D1CE4E5B9)
+_MIX2 = np.uint64(0x94D049BB133111EB)
+
+
+def uniform_from_id(cand_id, seed):
+    """Deterministic pseudo-random number in [0, 1) for every cand_id (splitmix64 hash).
+
+    Depends only on (cand_id, seed), not on how the data are split into chunks.
+    """
+    with np.errstate(over="ignore"):  # uint64 multiplication wraps around on purpose
+        z = np.asarray(cand_id, dtype=np.uint64) + np.uint64(seed + 1) * _GOLDEN
+        z = (z ^ (z >> np.uint64(30))) * _MIX1
+        z = (z ^ (z >> np.uint64(27))) * _MIX2
+        z = z ^ (z >> np.uint64(31))
+    return (z >> np.uint64(11)).astype(np.float64) / 2.0**53
+
+
+def downsample_background(frame, fraction, seed):
+    """Keep all signal and the background candidates with uniform_from_id < fraction."""
+    if fraction >= 1:
+        return frame
+    keep = (frame["label"] == 1) | (uniform_from_id(frame["cand_id"], seed) < fraction)
+    return frame[keep].reset_index(drop=True)
+
+
 def load_species(trees, cfg, species):
     """Read all trees chunk by chunk and return the model frame for `species`."""
     sp = cfg["species"][species]
@@ -111,7 +138,8 @@ def load_species(trees, cfg, species):
         # Global entry number over all input trees, assigned before any selection.
         ids = np.arange(report.global_entry_start, report.global_entry_stop, dtype=np.int64)
         chunk = chunk.assign(cand_id=ids)
-        frames.append(to_model_frame(select_species(chunk, sp), cfg["features"]))
+        frame = to_model_frame(select_species(chunk, sp), cfg["features"])
+        frames.append(downsample_background(frame, sp.get("bkg_fraction", 1.0), cfg["split"]["random_state"]))
     return pd.concat(frames, ignore_index=True)
 
 
@@ -220,6 +248,7 @@ def write_samples(df, cfg, species, input_files, output_root):
         "features": features,
         "pt_bins": edges,
         "bins": bins,
+        "bkg_fraction": cfg["species"][species].get("bkg_fraction", 1.0),
     }
     manifest_path = species_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
