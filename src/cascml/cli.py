@@ -116,6 +116,9 @@ def validate_analysis(cfg):
             raise ConfigError(f"species '{sp_name}': signal_flags must map exactly 'minus' and 'plus' to MC flag columns")
         if not isinstance(sp.get("split_by_charge"), bool):
             raise ConfigError(f"species '{sp_name}': split_by_charge must be true or false")
+        fraction = sp.get("bkg_fraction", 1.0)
+        if isinstance(fraction, bool) or not isinstance(fraction, (int, float)) or not 0 < fraction <= 1:
+            raise ConfigError(f"species '{sp_name}': bkg_fraction must be a number in (0, 1], got {fraction!r}")
         
     classes = cfg["classes"]
     if not isinstance(classes, list) or [c.get("name") for c in classes if isinstance(c, dict)] != ["bkg", "signal"]:
