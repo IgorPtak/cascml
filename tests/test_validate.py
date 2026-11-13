@@ -423,6 +423,8 @@ def test_validate_model_writes_metrics_json(species_dir, cfg):
     assert on_disk["sample_hash"] == sample_hash
     assert on_disk["bootstrap"] == {"n": 20, "ci": 0.95, "seed": cfg["split"]["random_state"]}
     assert len(on_disk["auc_test"]) == len(cfg["species"]["xi"]["pt_bins"]) - 1
+    plots = sorted(p.name for p in (path.parent / "plots").iterdir())
+    assert plots == ["efficiency_vs_threshold.png", "roc.png", "score_train_test.png"]
 
 
 def test_main_validate(species_dir, cfg, tmp_path, capsys):

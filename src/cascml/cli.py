@@ -200,6 +200,7 @@ def run_validate(args):
                 f"[{row['auc_lo']:.3f}, {row['auc_hi']:.3f}], "
                 f"{row['n_signal']} signal / {row['n_bkg']} bkg"
             )
+        print(f"  plots: {path.parent / 'plots'}")
     return 0
 
 

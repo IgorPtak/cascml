@@ -11,6 +11,7 @@ from scipy.stats import ks_2samp
 from sklearn.metrics import roc_auc_score
 
 from cascml.data import read_manifest, read_sample
+from cascml.plots import write_plots
 
 # Key under which cascml stores score-file metadata in the Parquet schema.
 SCORES_META_KEY = b"cascml_scores"
@@ -271,4 +272,5 @@ def validate_model(species_dir, model_name, cfg):
     }
     path = scores_path(species_dir, model_name).with_name("metrics.json")
     path.write_text(json.dumps(doc, indent=2) + "\n")
+    write_plots(frame, doc, path.parent / "plots")
     return path, doc
