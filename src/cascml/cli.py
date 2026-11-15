@@ -8,6 +8,7 @@ import yaml
 
 from cascml.data import DataError, list_trees, prepare_species, resolve_inputs, write_samples
 from cascml.validate import ValidationError, validate_model
+from cascml.train import train_species
 
 
 class ConfigError(Exception):
@@ -204,6 +205,27 @@ def run_validate(args):
     return 0
 
 
+def run_train(args):
+    """`cascml train`: train XGBoost per species and pT bin and write scores.parquet."""
+    cfg = load_yaml(args.config)
+    validate_analysis(cfg)
+    params_path = args.params or (Path(args.config).resolve().parent / "model_params.yml")
+    params_cfg = load_yaml(params_path)
+    output_root = _output_root(args)
+    seed = cfg["split"]["random_state"]
+    for sp_name in cfg["species"]:
+        xgb_params = model_params_for(params_cfg, sp_name)
+        species_dir = output_root / cfg["case"] / sp_name
+        out_path, stats = train_species(species_dir, xgb_params, args.model, seed)
+        print(f"species {sp_name}, model {args.model}: {out_path}")
+        for s in stats:
+            print(
+                f"  pT [{s['pt_lo']}, {s['pt_hi']}): "
+                f"best_iter={s['best_iteration']}, val_auc={s['best_score']:.4f}"
+            )
+    return 0
+
+
 def _contains_key(obj, key):
     """Return True if `key` appears in any mapping nested anywhere in `obj`."""
     if isinstance(obj, dict):
@@ -257,6 +279,14 @@ def main(argv=None):
         help="model name; scores are read from <output>/<case>/<species>/models/<model>/scores.parquet",
     )
     validate.set_defaults(func=run_validate)
+    
+    train = commands.add_parser("train", parents=[common], help="train XGBoost models on prepared samples")
+    train.add_argument("--model", required=True, help="model name (saved under models/<model>/)")
+    train.add_argument(
+        "-p", "--params",
+        help="model params YAML (default: model_params.yml next to the analysis config)",
+    )
+    train.set_defaults(func=run_train)
 
     args = parser.parse_args(argv)
     try:
