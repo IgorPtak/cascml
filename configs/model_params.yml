@@ -7,6 +7,7 @@ default:
   min_child_weight: 1
   tree_method: hist
   eval_metric: auc
+  early_stopping_rounds: 30
   n_jobs: -1
 
 per_species:
@@ -14,3 +15,4 @@ per_species:
   omega:
     max_depth: 3
     n_estimators: 200
+    min_child_weight: 10
