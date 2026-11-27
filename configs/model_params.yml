@@ -16,3 +16,4 @@ per_species:
     max_depth: 3
     n_estimators: 200
     min_child_weight: 10
+    scale_pos_weight: auto  # per pT bin: n_bkg / n_sig of the training folds
