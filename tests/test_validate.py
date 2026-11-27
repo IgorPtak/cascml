@@ -15,6 +15,8 @@ from cascml.validate import (
     auc_table,
     bootstrap_auc,
     compute_metrics,
+    delong_auc,
+    delong_components,
     efficiency_table,
     ks_train_test,
     load_validation_frame,
@@ -167,6 +169,60 @@ def test_bootstrap_perfect_classifier_has_no_spread():
 def test_bootstrap_is_reproducible():
     label, score = random_case(500, 4)
     assert bootstrap_auc(label, score, 100, 0.95, seed=7) == bootstrap_auc(label, score, 100, 0.95, seed=7)
+
+
+def test_delong_components_hand_computed():
+    # signal 0.8 beats both bkg (1), signal 0.4 beats only 0.2 (1/2); bkg 0.6 is below one of two signals (1/2).
+    auc, v10, v01 = delong_components([1, 1, 0, 0], [0.8, 0.4, 0.6, 0.2])
+    assert auc == 0.75
+    assert v10.tolist() == [1.0, 0.5]
+    assert v01.tolist() == [0.5, 1.0]
+
+
+def test_delong_ties_count_one_half():
+    auc, v10, v01 = delong_components([1, 0, 1, 0], [0.5, 0.5, 0.5, 0.5])
+    assert auc == 0.5
+    assert v10.tolist() == v01.tolist() == [0.5, 0.5]
+
+
+def test_delong_auc_equals_sklearn_with_ties():
+    # BDT scores repeat (finitely many leaves), so ties are the normal case.
+    label, score = random_case(5000, 8)
+    score = np.round(score + 0.3 * label, 1)
+    assert delong_auc(label, score, ci=0.95)[0] == pytest.approx(roc_auc(label, score), abs=1e-12)
+
+
+def test_delong_width_agrees_with_bootstrap():
+    label, score = random_case(4000, 9)
+    score = score + 0.3 * label
+    _, d_lo, d_hi = delong_auc(label, score, ci=0.95)
+    _, b_lo, b_hi = bootstrap_auc(label, score, n_boot=500, ci=0.95)
+    assert d_hi - d_lo == pytest.approx(b_hi - b_lo, rel=0.2)
+
+
+def test_delong_coverage_for_random_classifier():
+    rng = np.random.default_rng(11)
+    n_repeats = 300
+    hits = 0
+    for _ in range(n_repeats):
+        label = rng.integers(0, 2, size=200)
+        _, lo, hi = delong_auc(label, rng.random(200), ci=0.95)
+        hits += lo <= 0.5 <= hi
+    assert 0.91 <= hits / n_repeats <= 0.99
+
+
+def test_delong_perfect_classifier_has_no_spread():
+    assert delong_auc([0, 0, 1, 1], [0.1, 0.2, 0.8, 0.9], ci=0.95) == (1.0, 1.0, 1.0)
+
+
+def test_delong_single_signal_gives_finite_interval():
+    _, lo, hi = delong_auc([1, 0, 0, 0, 0], [0.5, 0.1, 0.7, 0.3, 0.2], ci=0.95)
+    assert 0.0 <= lo <= hi <= 1.0
+
+
+def test_delong_rejects_single_class():
+    with pytest.raises(ValidationError, match="both classes"):
+        delong_auc([1, 1, 1], [0.1, 0.2, 0.3], ci=0.95)
 
 
 def test_auc_table_with_bootstrap_adds_interval():

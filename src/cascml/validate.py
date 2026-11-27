@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-from scipy.stats import ks_2samp
+from scipy.stats import ks_2samp, norm, rankdata
 from sklearn.metrics import roc_auc_score
 
 from cascml.data import read_manifest, read_sample
@@ -120,6 +120,33 @@ def bootstrap_auc(label, score, n_boot, ci, seed=0):
     alpha = (1.0 - ci) / 2.0
     lo, hi = np.quantile(replicas, [alpha, 1.0 - alpha])
     return auc, float(lo), float(hi)
+
+
+def delong_components(label, score):
+    """AUC and DeLong structural components; return (auc, v10, v01).
+
+    v10[i]: fraction of background below signal i, v01[j]: fraction of signal above background j,
+    ties count 1/2. Midranks give all of them in O(N log N) (Sun & Xu 2014).
+    """
+    label = np.asarray(label)
+    score = np.asarray(score, dtype=np.float64)
+    roc_auc(label, score)  # raises ValidationError if a class is missing
+    sig = score[label == 1]
+    bkg = score[label == 0]
+    m, n = sig.size, bkg.size
+    rank_all = rankdata(np.concatenate([sig, bkg]))
+    v10 = (rank_all[:m] - rankdata(sig)) / n
+    v01 = 1.0 - (rank_all[m:] - rankdata(bkg)) / m
+    return float(v10.mean()), v10, v01
+
+
+def delong_auc(label, score, ci):
+    """AUC with the DeLong normal confidence interval clipped to [0, 1]; return (auc, lo, hi)."""
+    auc, v10, v01 = delong_components(label, score)
+    # A class with a single candidate has no sample variance; its term is left out instead of giving NaN.
+    var = sum(np.var(v, ddof=1) / v.size for v in (v10, v01) if v.size > 1)
+    half = norm.ppf(0.5 + ci / 2.0) * np.sqrt(var)
+    return auc, float(max(0.0, auc - half)), float(min(1.0, auc + half))
 
 
 def thresholds_for_efficiency(df, by, targets):
