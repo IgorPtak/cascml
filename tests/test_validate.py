@@ -131,6 +131,28 @@ def test_auc_table_per_bin():
     assert list(table["auc"]) == pytest.approx([1.0, 0.0])
 
 
+def test_pr_auc_hand_computed():
+    # by score: 0.8 sig, 0.4 bkg, 0.35 sig, 0.1 bkg -> precision 1 at recall 1/2, 2/3 at recall 1
+    df = pd.DataFrame({"pt_bin": 0, "label": [0, 0, 1, 1], "score": [0.1, 0.4, 0.35, 0.8]})
+    assert auc_table(df, by=["pt_bin"])["pr_auc"].iloc[0] == pytest.approx(0.5 * 1 + 0.5 * 2 / 3)
+
+
+def test_pr_auc_depends_on_signal_fraction_roc_auc_does_not():
+    # The same classifier on a sample with 10x more background: why pr_auc must not be compared across bins.
+    label, score = random_case(2000, 12)
+    score = score + 0.5 * label
+    bkg = label == 0
+    more_bkg = pd.DataFrame({
+        "pt_bin": 0,
+        "label": np.concatenate([label] + [label[bkg]] * 9),
+        "score": np.concatenate([score] + [score[bkg]] * 9),
+    })
+    base = auc_table(pd.DataFrame({"pt_bin": 0, "label": label, "score": score}), by=["pt_bin"]).iloc[0]
+    diluted = auc_table(more_bkg, by=["pt_bin"]).iloc[0]
+    assert diluted["auc"] == pytest.approx(base["auc"])
+    assert diluted["pr_auc"] < base["pr_auc"] - 0.1
+
+
 def random_case(n, seed):
     rng = np.random.default_rng(seed)
     return rng.integers(0, 2, size=n), rng.random(n)
@@ -234,14 +256,14 @@ def test_auc_table_with_interval(method):
         "score": rng.random(1000),
     })
     table = auc_table(df, by=["pt_bin"], ci_method=method, ci_level=0.95, n_boot=50)
-    assert list(table.columns) == ["pt_bin", "n_signal", "n_bkg", "auc", "auc_lo", "auc_hi"]
+    assert list(table.columns) == ["pt_bin", "n_signal", "n_bkg", "auc", "auc_lo", "auc_hi", "pr_auc"]
     assert (table["auc_lo"] <= table["auc"]).all()
     assert (table["auc"] <= table["auc_hi"]).all()
 
 
 def test_auc_table_without_method_has_no_interval():
     df = pd.DataFrame({"pt_bin": [0, 0, 0, 0], "label": [0, 0, 1, 1], "score": [0.1, 0.4, 0.35, 0.8]})
-    assert list(auc_table(df, by=["pt_bin"]).columns) == ["pt_bin", "n_signal", "n_bkg", "auc"]
+    assert list(auc_table(df, by=["pt_bin"]).columns) == ["pt_bin", "n_signal", "n_bkg", "auc", "pr_auc"]
 
 
 def test_auc_table_rejects_unknown_method():
@@ -292,6 +314,15 @@ def test_efficiency_table_hand_computed():
     assert row["eff_bkg"] == pytest.approx(0.2)
     assert row["eff_signal_err"] == pytest.approx(np.sqrt(0.7 * 0.3 / 10))
     assert (row["n_signal"], row["n_bkg"]) == (10, 10)
+    assert row["bkg_rejection"] == pytest.approx(5.0)
+
+
+def test_bkg_rejection_is_none_when_no_background_passes():
+    df = pd.DataFrame({"pt_bin": 0, "label": [0, 0, 1, 1], "score": [0.1, 0.2, 0.8, 0.9]})
+    t = thresholds_for_efficiency(df, by=["pt_bin"], targets=[0.5])
+    row = efficiency_table(df, t, by=["pt_bin"]).iloc[0]
+    assert row["eff_bkg"] == 0.0
+    assert row["bkg_rejection"] is None
 
 
 def test_efficiency_table_per_charge_with_thresholds_per_bin():
@@ -451,7 +482,24 @@ def test_compute_metrics_perfect_model_is_json_ready(species_dir, cfg):
     assert [row["auc"] for row in metrics["auc_test"]] == pytest.approx([1.0, 1.0, 1.0])
     assert len(metrics["auc_test_by_charge"]) == 6
     assert all(row["eff_bkg"] == 0.0 for row in metrics["working_points_test"])
-    json.dumps(metrics)
+    # A perfect model passes no background: bkg_rejection is null, and the document is strict JSON.
+    assert all(row["bkg_rejection"] is None for row in metrics["working_points_test"])
+    json.dumps(metrics, allow_nan=False)
+
+
+def test_compute_metrics_mixed_null_and_numbers_is_strict_json(species_dir, cfg):
+    # Perfect in pT bin 0 (bkg_rejection None), noisy elsewhere (a number): pandas would turn None into NaN.
+    sdir, df = species_dir
+    sample_hash = json.loads((sdir / "manifest.json").read_text())["sample_hash"]
+    noisy = 0.5 * df["label"] + np.random.default_rng(3).random(len(df))  # classes overlap
+    score = np.where(df["pt_bin"] == 0, df["label"], noisy)
+    write_scores(scores_path(sdir, "m"), df["cand_id"], score, sample_hash, "m")
+    frame, _, _ = load_validation_frame(sdir, "m")
+    metrics = compute_metrics(frame, list(cfg["features"]), working_points=[0.8])
+    rejection = [row["bkg_rejection"] for row in metrics["working_points_test"]]
+    assert rejection[0] is None
+    assert all(isinstance(r, float) for r in rejection[1:])
+    json.dumps(metrics, allow_nan=False)
 
 
 def test_validate_model_writes_metrics_json(species_dir, cfg):
