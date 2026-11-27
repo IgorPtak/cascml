@@ -69,7 +69,8 @@ guards:
   min_signal_test: 50
 
 validation:
-  bootstrap: {n: 1000, ci: 0.95}
+  auc_ci: {method: delong, level: 0.95}  # method: delong | bootstrap
+  bootstrap: {n: 1000}                   # replicas, used only with auc_ci.method: bootstrap
   working_points: [0.7, 0.8, 0.9]
 
 export:

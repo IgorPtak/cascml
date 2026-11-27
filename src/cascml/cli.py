@@ -7,7 +7,7 @@ from pathlib import Path
 import yaml
 
 from cascml.data import DataError, list_trees, prepare_species, resolve_inputs, write_samples
-from cascml.validate import ValidationError, validate_model
+from cascml.validate import AUC_CI_METHODS, ValidationError, validate_model
 from cascml.train import train_species
 
 
@@ -136,9 +136,16 @@ def validate_analysis(cfg):
     _require_positive_int(cfg["guards"].get("min_signal_train"), "guards.min_signal_train")
     _require_positive_int(cfg["guards"].get("min_signal_test"), "guards.min_signal_test")
 
-    bootstrap = cfg["validation"].get("bootstrap", {})
-    _require_positive_int(bootstrap.get("n"), "validation.bootstrap.n")
-    _require_fraction(bootstrap.get("ci"), "validation.bootstrap.ci")
+    validation = cfg["validation"]
+    bootstrap = validation.get("bootstrap") or {}
+    if "ci" in bootstrap:
+        raise ConfigError("validation.bootstrap.ci was moved to validation.auc_ci.level")
+    auc_ci = validation.get("auc_ci")
+    if not isinstance(auc_ci, dict) or auc_ci.get("method") not in AUC_CI_METHODS:
+        raise ConfigError(f"validation.auc_ci.method must be one of {', '.join(AUC_CI_METHODS)}")
+    _require_fraction(auc_ci.get("level"), "validation.auc_ci.level")
+    if auc_ci["method"] == "bootstrap":
+        _require_positive_int(bootstrap.get("n"), "validation.bootstrap.n")
     for wp in cfg["validation"].get("working_points", []):
         _require_fraction(wp, "validation.working_points")
             

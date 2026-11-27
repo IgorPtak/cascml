@@ -184,7 +184,6 @@ def test_train_species_without_samples(tmp_path):
 
 def test_main_train_then_validate(species_dir, cfg, tmp_path, capsys):
     sdir, _ = species_dir
-    cfg["validation"]["bootstrap"]["n"] = 20
     config = tmp_path / "analysis.yml"
     config.write_text(yaml.safe_dump(cfg))
     params = tmp_path / "params.yml"
