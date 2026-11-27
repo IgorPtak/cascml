@@ -70,4 +70,3 @@ validation:
 
 export:
   onnx_dir_name: onnx
-  o2_json: cascademlselection_config.json
