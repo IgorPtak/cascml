@@ -1,5 +1,7 @@
 """XGBoost training per pT bin on prepared Parquet samples."""
 
+import json
+import time
 from pathlib import Path
 
 import numpy as np
@@ -50,13 +52,15 @@ def train_species(species_dir, xgb_params, model_name, seed):
         bin_params = resolve_params(params, y_train)
 
         clf = xgb.XGBClassifier(**bin_params)
+        start = time.perf_counter()
         clf.fit(
             X_train,
             y_train,
             eval_set=[(X_val, val["label"].to_numpy())],
             verbose=False,
         )
-        
+        train_time_s = time.perf_counter() - start
+
         bin_name = bin_dir_name(entry["pt_lo"], entry["pt_hi"])
         model_file = species_dir / "models" / model_name / bin_name / "model.ubj"
         model_file.parent.mkdir(parents=True, exist_ok=True)
@@ -71,8 +75,10 @@ def train_species(species_dir, xgb_params, model_name, seed):
             "best_iteration": getattr(clf, "best_iteration", None),
             "best_score": getattr(clf, "best_score", None),
             "scale_pos_weight": bin_params.get("scale_pos_weight"),
+            "train_time_s": round(train_time_s, 3),
+            "params_resolved": bin_params,
         })
-    
+
     out_path = scores_path(species_dir, model_name)
     write_scores(
         out_path,
@@ -81,4 +87,19 @@ def train_species(species_dir, xgb_params, model_name, seed):
         manifest["sample_hash"],
         model_name,
     )
+    # Written last: its presence means training finished for every bin.
+    meta = {
+        "model": model_name,
+        "family": "xgboost",
+        "xgboost_version": xgb.__version__,
+        "case": manifest["case"],
+        "species": manifest["species"],
+        "sample_hash": manifest["sample_hash"],
+        "features": features,
+        "pt_bins": manifest["pt_bins"],
+        "seed": seed,
+        "params": params,
+        "bins": bin_stats,
+    }
+    out_path.with_name("train_meta.json").write_text(json.dumps(meta, indent=2) + "\n")
     return out_path, bin_stats
