@@ -8,7 +8,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 from scipy.stats import ks_2samp, norm, rankdata
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import average_precision_score, roc_auc_score
 
 from cascml.data import read_manifest, read_sample
 from cascml.plots import write_plots
@@ -105,6 +105,8 @@ def auc_table(df, by, ci_method=None, ci_level=0.95, n_boot=0, seed=0):
             row["auc"] = roc_auc(group["label"], group["score"])
         else:
             raise ValidationError(f"unknown AUC interval method {ci_method!r}, expected one of {AUC_CI_METHODS}")
+        # Depends on the signal fraction of the sample (bkg_fraction, pT bin): compare models, not bins.
+        row["pr_auc"] = float(average_precision_score(group["label"], group["score"]))
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -201,6 +203,8 @@ def efficiency_table(df, thresholds, by):
             "eff_signal_err": float(np.sqrt(eff_sig * (1 - eff_sig) / n_sig)),
             "eff_bkg": eff_bkg,
             "eff_bkg_err": float(np.sqrt(eff_bkg * (1 - eff_bkg) / n_bkg)),
+            # None (JSON null) when no background passes: infinity is not valid JSON.
+            "bkg_rejection": 1.0 / eff_bkg if eff_bkg > 0 else None,
         })
     return pd.DataFrame(rows)
 
@@ -283,7 +287,11 @@ def compute_metrics(df, features, working_points, ci_method="delong", ci_level=0
         "ks_train_test": ks_train_test(df, ["pt_bin"]),
         "sentinels": sentinel_table(df, features, ["pt_bin"]),
     }
-    return {name: table.to_dict(orient="records") for name, table in tables.items()}
+    # pandas turns None into NaN in numeric columns; NaN is not valid JSON, null is.
+    return {
+        name: table.astype(object).where(table.notna(), None).to_dict(orient="records")
+        for name, table in tables.items()
+    }
 
 
 def validate_model(species_dir, model_name, cfg):
