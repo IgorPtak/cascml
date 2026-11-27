@@ -225,22 +225,29 @@ def test_delong_rejects_single_class():
         delong_auc([1, 1, 1], [0.1, 0.2, 0.3], ci=0.95)
 
 
-def test_auc_table_with_bootstrap_adds_interval():
+@pytest.mark.parametrize("method", ["delong", "bootstrap"])
+def test_auc_table_with_interval(method):
     rng = np.random.default_rng(5)
     df = pd.DataFrame({
         "pt_bin": np.repeat([0, 1], 500),
         "label": rng.integers(0, 2, size=1000),
         "score": rng.random(1000),
     })
-    table = auc_table(df, by=["pt_bin"], n_boot=50, ci=0.95)
+    table = auc_table(df, by=["pt_bin"], ci_method=method, ci_level=0.95, n_boot=50)
     assert list(table.columns) == ["pt_bin", "n_signal", "n_bkg", "auc", "auc_lo", "auc_hi"]
     assert (table["auc_lo"] <= table["auc"]).all()
     assert (table["auc"] <= table["auc_hi"]).all()
 
 
-def test_auc_table_without_bootstrap_has_no_interval():
+def test_auc_table_without_method_has_no_interval():
     df = pd.DataFrame({"pt_bin": [0, 0, 0, 0], "label": [0, 0, 1, 1], "score": [0.1, 0.4, 0.35, 0.8]})
     assert list(auc_table(df, by=["pt_bin"]).columns) == ["pt_bin", "n_signal", "n_bkg", "auc"]
+
+
+def test_auc_table_rejects_unknown_method():
+    df = pd.DataFrame({"pt_bin": [0, 0], "label": [0, 1], "score": [0.1, 0.8]})
+    with pytest.raises(ValidationError, match="unknown AUC interval method"):
+        auc_table(df, by=["pt_bin"], ci_method="wilson")
 
 
 def ten_signals_ten_bkg():
@@ -436,7 +443,7 @@ def test_compute_metrics_perfect_model_is_json_ready(species_dir, cfg):
     score = df["label"] + 0.1 * df["pt"]
     write_scores(scores_path(sdir, "perfect"), df["cand_id"], score, sample_hash, "perfect")
     frame, _, _ = load_validation_frame(sdir, "perfect")
-    metrics = compute_metrics(frame, list(cfg["features"]), n_boot=20, ci=0.95, working_points=[0.8])
+    metrics = compute_metrics(frame, list(cfg["features"]), working_points=[0.8])
     assert set(metrics) == {
         "auc_test", "auc_test_by_charge", "auc_train", "working_points_test",
         "working_points_test_by_charge", "ks_train_test", "sentinels",
@@ -451,23 +458,32 @@ def test_validate_model_writes_metrics_json(species_dir, cfg):
     sdir, df = species_dir
     sample_hash = json.loads((sdir / "manifest.json").read_text())["sample_hash"]
     write_scores(scores_path(sdir, "perfect"), df["cand_id"], df["label"] + 0.1 * df["pt"], sample_hash, "perfect")
-    cfg["validation"]["bootstrap"]["n"] = 20
     path, doc = validate_model(sdir, "perfect", cfg)
     assert path == sdir / "models" / "perfect" / "metrics.json"
     on_disk = json.loads(path.read_text())
     assert on_disk == doc
     assert on_disk["sample_hash"] == sample_hash
-    assert on_disk["bootstrap"] == {"n": 20, "ci": 0.95, "seed": cfg["split"]["random_state"]}
+    assert on_disk["auc_ci"] == {"method": "delong", "level": 0.95}
     assert len(on_disk["auc_test"]) == len(cfg["species"]["xi"]["pt_bins"]) - 1
     plots = sorted(p.name for p in (path.parent / "plots").iterdir())
     assert plots == ["efficiency_vs_threshold.png", "roc.png", "score_train_test.png"]
+
+
+def test_validate_model_records_bootstrap_settings(species_dir, cfg):
+    sdir, df = species_dir
+    sample_hash = json.loads((sdir / "manifest.json").read_text())["sample_hash"]
+    write_scores(scores_path(sdir, "m"), df["cand_id"], df["label"] + 0.1 * df["pt"], sample_hash, "m")
+    cfg["validation"]["auc_ci"]["method"] = "bootstrap"
+    cfg["validation"]["bootstrap"]["n"] = 20
+    _, doc = validate_model(sdir, "m", cfg)
+    assert doc["auc_ci"] == {"method": "bootstrap", "level": 0.95, "n_boot": 20, "seed": cfg["split"]["random_state"]}
+    assert all("auc_lo" in row for row in doc["auc_test"])
 
 
 def test_main_validate(species_dir, cfg, tmp_path, capsys):
     sdir, df = species_dir
     sample_hash = json.loads((sdir / "manifest.json").read_text())["sample_hash"]
     write_scores(scores_path(sdir, "perfect"), df["cand_id"], df["label"] + 0.1 * df["pt"], sample_hash, "perfect")
-    cfg["validation"]["bootstrap"]["n"] = 20
     config = tmp_path / "analysis.yml"
     config.write_text(yaml.safe_dump(cfg))
     assert main(["validate", "-c", str(config), "--output", str(tmp_path), "--model", "perfect"]) == 0

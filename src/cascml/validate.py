@@ -16,6 +16,7 @@ from cascml.plots import write_plots
 # Key under which cascml stores score-file metadata in the Parquet schema.
 SCORES_META_KEY = b"cascml_scores"
 SENTINEL_THRESHOLD = 999.0
+AUC_CI_METHODS = ("delong", "bootstrap")
 
 
 class ValidationError(Exception):
@@ -82,10 +83,10 @@ def roc_auc(label, score):
     return float(roc_auc_score(label, score))
 
 
-def auc_table(df, by, n_boot=0, ci=0.95, seed=0):
+def auc_table(df, by, ci_method=None, ci_level=0.95, n_boot=0, seed=0):
     """AUC and class counts for every group of `df` defined by the columns `by`.
 
-    With n_boot > 0 also the bootstrap confidence interval (columns auc_lo, auc_hi).
+    ci_method "delong" or "bootstrap" (n_boot replicas) adds the confidence interval (columns auc_lo, auc_hi).
     """
     rows = []
     for key, group in df.groupby(list(by), sort=True):
@@ -94,10 +95,16 @@ def auc_table(df, by, n_boot=0, ci=0.95, seed=0):
             "n_signal": int((group["label"] == 1).sum()),
             "n_bkg": int((group["label"] == 0).sum()),
         }
-        if n_boot > 0:
-            row["auc"], row["auc_lo"], row["auc_hi"] = bootstrap_auc(group["label"], group["score"], n_boot, ci, seed)
-        else:
+        if ci_method == "delong":
+            row["auc"], row["auc_lo"], row["auc_hi"] = delong_auc(group["label"], group["score"], ci_level)
+        elif ci_method == "bootstrap":
+            row["auc"], row["auc_lo"], row["auc_hi"] = bootstrap_auc(
+                group["label"], group["score"], n_boot, ci_level, seed
+            )
+        elif ci_method is None:
             row["auc"] = roc_auc(group["label"], group["score"])
+        else:
+            raise ValidationError(f"unknown AUC interval method {ci_method!r}, expected one of {AUC_CI_METHODS}")
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -261,14 +268,15 @@ def load_validation_frame(species_dir, model_name):
     return frame, manifest, scores_meta
 
 
-def compute_metrics(df, features, n_boot, ci, working_points, seed=0):
+def compute_metrics(df, features, working_points, ci_method="delong", ci_level=0.95, n_boot=0, seed=0):
     """All validation metrics of one model; every table is a list of row dicts, ready for JSON."""
     test = df[df["fold"] == -1]
     train = df[df["fold"] >= 1]
     thresholds = thresholds_for_efficiency(df[df["fold"] == 0], by=["pt_bin"], targets=working_points)
+    interval = {"ci_method": ci_method, "ci_level": ci_level, "n_boot": n_boot, "seed": seed}
     tables = {
-        "auc_test": auc_table(test, ["pt_bin"], n_boot, ci, seed),
-        "auc_test_by_charge": auc_table(test, ["pt_bin", "charge"], n_boot, ci, seed),
+        "auc_test": auc_table(test, ["pt_bin"], **interval),
+        "auc_test_by_charge": auc_table(test, ["pt_bin", "charge"], **interval),
         "auc_train": auc_table(train, ["pt_bin"]),
         "working_points_test": efficiency_table(test, thresholds, ["pt_bin"]),
         "working_points_test_by_charge": efficiency_table(test, thresholds, ["pt_bin", "charge"]),
@@ -282,10 +290,13 @@ def validate_model(species_dir, model_name, cfg):
     """Compute all metrics of one model and write models/<model>/metrics.json; return (path, document)."""
     frame, manifest, scores_meta = load_validation_frame(species_dir, model_name)
     val = cfg["validation"]
-    seed = cfg["split"]["random_state"]
+    auc_ci = {"method": val["auc_ci"]["method"], "level": val["auc_ci"]["level"]}
+    if auc_ci["method"] == "bootstrap":
+        auc_ci.update(n_boot=val["bootstrap"]["n"], seed=cfg["split"]["random_state"])
     metrics = compute_metrics(
-        frame, manifest["features"], val["bootstrap"]["n"], val["bootstrap"]["ci"],
-        val["working_points"], seed=seed,
+        frame, manifest["features"], val["working_points"],
+        ci_method=auc_ci["method"], ci_level=auc_ci["level"],
+        n_boot=auc_ci.get("n_boot", 0), seed=auc_ci.get("seed", 0),
     )
     doc = {
         "model": scores_meta["model"],
@@ -293,7 +304,7 @@ def validate_model(species_dir, model_name, cfg):
         "species": manifest["species"],
         "sample_hash": manifest["sample_hash"],
         "pt_bins": manifest["pt_bins"],
-        "bootstrap": {"n": val["bootstrap"]["n"], "ci": val["bootstrap"]["ci"], "seed": seed},
+        "auc_ci": auc_ci,
         "working_points": val["working_points"],
         **metrics,
     }

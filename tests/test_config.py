@@ -17,6 +17,11 @@ def test_valid_config_passes(cfg):
     validate_analysis(cfg)
 
 
+def test_delong_does_not_need_bootstrap_section(cfg):
+    cfg["validation"].pop("bootstrap")
+    validate_analysis(cfg)
+
+
 @pytest.mark.parametrize(
     "mutate, message",
     [
@@ -59,8 +64,17 @@ def test_valid_config_passes(cfg):
         pytest.param(lambda c: c["split"].update(n_folds=1), "at least 2", id="n-folds-one"),
         pytest.param(lambda c: c["guards"].update(min_signal_test=0), "min_signal_test", id="guard-zero"),
         pytest.param(lambda c: c["guards"].update(min_signal_train=True), "min_signal_train", id="guard-bool"),
-        pytest.param(lambda c: c["validation"]["bootstrap"].update(n=0), r"bootstrap\.n", id="bootstrap-n"),
-        pytest.param(lambda c: c["validation"]["bootstrap"].update(ci=95), r"bootstrap\.ci", id="bootstrap-ci"),
+        pytest.param(lambda c: c["validation"].pop("auc_ci"), r"auc_ci\.method", id="auc-ci-missing"),
+        pytest.param(lambda c: c["validation"]["auc_ci"].update(method="wilson"), r"auc_ci\.method", id="auc-ci-method"),
+        pytest.param(lambda c: c["validation"]["auc_ci"].update(level=95), r"auc_ci\.level", id="auc-ci-level"),
+        pytest.param(
+            lambda c: (c["validation"]["auc_ci"].update(method="bootstrap"), c["validation"].pop("bootstrap")),
+            r"bootstrap\.n",
+            id="bootstrap-without-n",
+        ),
+        pytest.param(
+            lambda c: c["validation"]["bootstrap"].update(ci=0.95), r"moved to validation\.auc_ci\.level", id="old-bootstrap-ci"
+        ),
         pytest.param(lambda c: c["validation"].update(working_points=[0.8, 0]), "working_points", id="working-point"),
     ],
 )
