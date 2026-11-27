@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 import uproot
 
@@ -46,6 +47,37 @@ def hyperloop_file():
     if not path.is_file():
         pytest.skip(f"test file not found: {path} (set CASCML_TEST_FILE)")
     return path
+
+
+@pytest.fixture
+def make_sample():
+    """Factory: synthetic sample in the cascml sample format, for the xi species of the test config.
+
+    signal_shift moves every feature of signal candidates, so that a model has something to learn.
+    """
+
+    def make(cfg, n_per_bin=400, seed=0, signal_shift=0.0):
+        rng = np.random.default_rng(seed)
+        edges = cfg["species"]["xi"]["pt_bins"]
+        parts = []
+        for b in range(len(edges) - 1):
+            n = n_per_bin
+            label = np.tile(np.array([0, 1], dtype=np.int8), n // 2)
+            part = pd.DataFrame({
+                f: (rng.normal(size=n) + signal_shift * label).astype(np.float32) for f in cfg["features"]
+            })
+            part["pt"] = rng.uniform(edges[b], edges[b + 1], size=n).astype(np.float32)
+            part["charge"] = rng.choice(np.array([-1, 1], dtype=np.int8), size=n)
+            part["label"] = label
+            part["fold"] = np.repeat(np.array([-1, 0, 1, 2, 3, 4, -1, 1], dtype=np.int8), n // 8)
+            part["is_test"] = part["fold"] == -1
+            part["pt_bin"] = b
+            parts.append(part)
+        df = pd.concat(parts, ignore_index=True)
+        df["cand_id"] = np.arange(len(df), dtype=np.int64) * 3 + 7
+        return df
+
+    return make
 
 
 @pytest.fixture

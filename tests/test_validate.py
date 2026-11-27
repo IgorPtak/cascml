@@ -344,29 +344,9 @@ def test_sentinel_threshold_value():
     assert SENTINEL_THRESHOLD == 999.0
 
 
-def make_prepared_sample(cfg, n_per_bin=400, seed=0):
-    """Synthetic sample in the cascml sample format, for the xi species of the test config."""
-    rng = np.random.default_rng(seed)
-    edges = cfg["species"]["xi"]["pt_bins"]
-    parts = []
-    for b in range(len(edges) - 1):
-        n = n_per_bin
-        part = pd.DataFrame({f: rng.normal(size=n).astype(np.float32) for f in cfg["features"]})
-        part["pt"] = rng.uniform(edges[b], edges[b + 1], size=n).astype(np.float32)
-        part["charge"] = rng.choice(np.array([-1, 1], dtype=np.int8), size=n)
-        part["label"] = np.tile(np.array([0, 1], dtype=np.int8), n // 2)
-        part["fold"] = np.repeat(np.array([-1, 0, 1, 2, 3, 4, -1, 1], dtype=np.int8), n // 8)
-        part["is_test"] = part["fold"] == -1
-        part["pt_bin"] = b
-        parts.append(part)
-    df = pd.concat(parts, ignore_index=True)
-    df["cand_id"] = np.arange(len(df), dtype=np.int64) * 3 + 7
-    return df
-
-
 @pytest.fixture
-def species_dir(cfg, tmp_path):
-    df = make_prepared_sample(cfg)
+def species_dir(cfg, tmp_path, make_sample):
+    df = make_sample(cfg)
     manifest_path = write_samples(df, cfg, "xi", [Path("/data/fake.root")], tmp_path)
     return manifest_path.parent, df
 
