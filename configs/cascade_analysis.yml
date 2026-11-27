@@ -21,6 +21,12 @@ features:
   bachBaryonCosPA:     {column: fBachBaryonCosPA}
   bachBaryonDCAxyToPV: {column: fBachBaryonDCAxyToPV}
 
+# Stored in the samples for physics checks (mass sculpting, centrality); never model inputs.
+meta_columns:
+  mass_xi:    {column: fMXi}
+  mass_omega: {column: fMOmega}
+  centrality: {column: fCentrality}
+
 species:
   xi:
     mass_window_bit: 0

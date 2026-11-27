@@ -15,8 +15,8 @@ from sklearn.model_selection import StratifiedKFold, train_test_split
 # Key under which cascml stores its metadata in the Parquet schema.
 PARQUET_META_KEY = b"cascml"
 # Bump when the sample columns or metadata change; read_sample rejects other versions.
-# 1: initial format, 2: cand_id column.
-FORMAT_VERSION = 2
+# 1: initial format, 2: cand_id column, 3: meta_columns.
+FORMAT_VERSION = 3
 SAMPLE_COLUMNS_EXTRA = ("pt", "charge", "label", "is_test", "fold", "cand_id")
 
 
@@ -63,6 +63,7 @@ def required_columns(cfg, species):
     """Tree columns needed to build the sample for `species`."""
     sp = cfg["species"][species]
     columns = [spec["column"] for spec in cfg["features"].values()]
+    columns += [spec["column"] for spec in cfg["meta_columns"].values()]
     columns += list(BASE_COLUMNS)
     columns += [sp["signal_flags"]["minus"], sp["signal_flags"]["plus"]]
     return columns
@@ -84,14 +85,17 @@ def select_species(chunk, sp):
     return chunk.assign(label=label.astype("int8"))
 
 
-def to_model_frame(chunk, features):
-    """Build the model input: O2 feature names in config order (float32) plus pt, charge, label, cand_id."""
+def to_model_frame(chunk, features, meta_columns=None):
+    """Build the sample frame: O2 feature names in config order (float32), meta columns (float32, never
+    model inputs), then pt, charge, label, cand_id."""
     out = {}
     for name, spec in features.items():
         values = chunk[spec["column"]].to_numpy(dtype=np.float32)
         if spec.get("transform") == "cos":
             values = np.cos(values)
         out[name] = values
+    for name, spec in (meta_columns or {}).items():
+        out[name] = chunk[spec["column"]].to_numpy(dtype=np.float32)
     out["pt"] = chunk["fPt"].to_numpy(dtype=np.float32)
     out["charge"] = chunk["fCharge"].to_numpy(dtype=np.int8)
     out["label"] = chunk["label"].to_numpy()
@@ -138,7 +142,7 @@ def load_species(trees, cfg, species):
         # Global entry number over all input trees, assigned before any selection.
         ids = np.arange(report.global_entry_start, report.global_entry_stop, dtype=np.int64)
         chunk = chunk.assign(cand_id=ids)
-        frame = to_model_frame(select_species(chunk, sp), cfg["features"])
+        frame = to_model_frame(select_species(chunk, sp), cfg["features"], cfg["meta_columns"])
         frames.append(downsample_background(frame, sp.get("bkg_fraction", 1.0), cfg["split"]["random_state"]))
     return pd.concat(frames, ignore_index=True)
 
@@ -218,6 +222,7 @@ def write_samples(df, cfg, species, input_files, output_root):
     """Write one Parquet file per pT bin and a manifest.json; return the manifest path."""
     edges = cfg["species"][species]["pt_bins"]
     features = list(cfg["features"])
+    meta_columns = list(cfg["meta_columns"])
     species_dir = Path(output_root) / cfg["case"] / species
     fingerprint = sample_hash(cfg, input_files)
     bins = []
@@ -231,10 +236,11 @@ def write_samples(df, cfg, species, input_files, output_root):
             "pt_lo": lo,
             "pt_hi": hi,
             "features": features,
+            "meta_columns": meta_columns,
             "sample_hash": fingerprint,
             "input_files": [str(f) for f in input_files],
         }
-        part = df.loc[df["pt_bin"] == b, features + list(SAMPLE_COLUMNS_EXTRA)]
+        part = df.loc[df["pt_bin"] == b, features + meta_columns + list(SAMPLE_COLUMNS_EXTRA)]
         table = pa.Table.from_pandas(part, preserve_index=False)
         table = table.replace_schema_metadata({**table.schema.metadata, PARQUET_META_KEY: json.dumps(meta)})
         (species_dir / rel_path).parent.mkdir(parents=True, exist_ok=True)
@@ -246,6 +252,7 @@ def write_samples(df, cfg, species, input_files, output_root):
         "species": species,
         "sample_hash": fingerprint,
         "features": features,
+        "meta_columns": meta_columns,
         "pt_bins": edges,
         "bins": bins,
         "bkg_fraction": cfg["species"][species].get("bkg_fraction", 1.0),

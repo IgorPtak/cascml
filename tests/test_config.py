@@ -41,7 +41,13 @@ def test_delong_does_not_need_bootstrap_section(cfg):
             "unknown transform",
             id="transform-unknown",
         ),
-        pytest.param(lambda c: xi(c).update(mass_window_bit=2), "mass_window_bit", id="bit-out-of-range"),
+        pytest.param(lambda c: c.pop("meta_columns"), "missing top-level keys", id="meta-missing"),
+        pytest.param(lambda c: c["meta_columns"].update(pt={"column": "fPt"}), "clashes", id="meta-clash-sample"),
+        pytest.param(lambda c: c["meta_columns"].update(v0radius={"column": "fV0radius"}), "clashes", id="meta-clash-feature"),
+        pytest.param(
+            lambda c: c["meta_columns"].update(m={"column": "fMXi", "transform": "cos"}), "only a 'column'", id="meta-transform"
+        ),
+        pytest.param(lambda c: xi(c).update(mass_window_bit=2),"mass_window_bit", id="bit-out-of-range"),
         pytest.param(lambda c: xi(c).update(mass_window_bit=True), "mass_window_bit", id="bit-bool"),
         pytest.param(lambda c: xi(c).pop("mass_window_bit"), "mass_window_bit", id="bit-missing"),
         pytest.param(lambda c: xi(c).update(pt_bins=[0.5]), "at least 2 edges", id="pt-bins-single"),

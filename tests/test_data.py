@@ -133,14 +133,18 @@ def test_select_omega_keeps_true_xi_as_background(mixed_chunk):
 def test_required_columns(cfg):
     columns = required_columns(cfg, "xi")
     assert columns[:12] == [spec["column"] for spec in cfg["features"].values()]
-    assert set(columns[12:]) == {"fPt", "fCharge", "fMassWindows", "fIsXiMinus", "fIsXiPlus"}
+    assert set(columns[12:]) == {
+        "fMXi", "fMOmega", "fCentrality", "fPt", "fCharge", "fMassWindows", "fIsXiMinus", "fIsXiPlus"
+    }
 
 
 def test_model_frame_columns_and_types(cfg):
     chunk = pd.DataFrame({col: [default] for col, (_, default) in TREE_DEFAULTS.items()}).assign(label=1, cand_id=0)
-    out = to_model_frame(chunk, cfg["features"])
-    assert list(out.columns) == list(cfg["features"]) + ["pt", "charge", "label", "cand_id"]
-    assert all(out[name].dtype == np.float32 for name in cfg["features"])
+    out = to_model_frame(chunk, cfg["features"], cfg["meta_columns"])
+    meta = list(cfg["meta_columns"])
+    assert list(out.columns) == list(cfg["features"]) + meta + ["pt", "charge", "label", "cand_id"]
+    assert all(out[name].dtype == np.float32 for name in list(cfg["features"]) + meta)
+    assert out["centrality"][0] == np.float32(50.0)
 
 
 def test_model_frame_applies_cos(cfg):
@@ -313,7 +317,7 @@ def prepared(cfg):
     # Minimal prepared sample: 2 rows per pT bin of the real config, one signal and one background.
     n_bins = len(cfg["species"]["xi"]["pt_bins"]) - 1
     rows = 2 * n_bins
-    df = pd.DataFrame({name: np.full(rows, 0.5, dtype=np.float32) for name in cfg["features"]})
+    df = pd.DataFrame({name: np.full(rows, 0.5, dtype=np.float32) for name in [*cfg["features"], *cfg["meta_columns"]]})
     return df.assign(
         pt=np.full(rows, 1.0, dtype=np.float32),
         charge=np.tile(np.array([-1, 1], dtype=np.int8), n_bins),
@@ -333,8 +337,11 @@ def test_samples_roundtrip(prepared, cfg, tmp_path):
     manifest = read_manifest(write_samples(prepared, cfg, "xi", INPUTS, tmp_path).parent)
     assert [b["file"].parent.parent.name for b in manifest["bins"]] == ["pt_0.5_1.5", "pt_1.5_3", "pt_3_10"]
     df, meta = read_sample(manifest["bins"][0]["file"], manifest["sample_hash"])
-    # Contract with other models: O2 feature order, then pt, charge, label, is_test, fold, cand_id; no pt_bin.
-    assert list(df.columns) == list(cfg["features"]) + ["pt", "charge", "label", "is_test", "fold", "cand_id"]
+    # Contract with other models: O2 feature order, meta columns, then pt, charge, label, is_test, fold, cand_id;
+    # no pt_bin. Meta columns are stored but never listed as features.
+    meta_columns = list(cfg["meta_columns"])
+    assert list(df.columns) == list(cfg["features"]) + meta_columns + ["pt", "charge", "label", "is_test", "fold", "cand_id"]
+    assert manifest["features"] == list(cfg["features"]) and manifest["meta_columns"] == meta_columns
     assert df["cascradius"].dtype == np.float32 and df["label"].dtype == np.int8 and df["fold"].dtype == np.int8
     assert list(df["cand_id"]) == [100, 101] and df["cand_id"].dtype == np.int64
     assert (meta["pt_lo"], meta["pt_hi"], meta["input_files"]) == (0.5, 1.5, INPUTS)
@@ -370,8 +377,8 @@ def test_stale_sample_is_rejected(prepared, cfg, tmp_path):
 def test_sample_from_other_format_version_is_rejected(prepared, cfg, tmp_path, monkeypatch):
     manifest = read_manifest(write_samples(prepared, cfg, "xi", INPUTS, tmp_path).parent)
     # Reading with a cascml that expects a newer format.
-    monkeypatch.setattr("cascml.data.FORMAT_VERSION", 3)
-    with pytest.raises(DataError, match="format version 2"):
+    monkeypatch.setattr("cascml.data.FORMAT_VERSION", FORMAT_VERSION + 1)
+    with pytest.raises(DataError, match=f"format version {FORMAT_VERSION}"):
         read_sample(manifest["bins"][0]["file"])
 
 
