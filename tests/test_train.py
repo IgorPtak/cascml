@@ -147,6 +147,26 @@ def test_reloaded_model_reproduces_scores(species_dir):
         assert np.max(np.abs(reloaded - expected)) == 0.0
 
 
+def test_early_stopped_model_file_holds_only_used_trees(species_dir):
+    # A plain Booster ignores best_iteration; after trimming it must give the same scores as validation.
+    sdir, _ = species_dir
+    params = {**FAST_PARAMS, "n_estimators": 200, "learning_rate": 1.0, "early_stopping_rounds": 2}
+    out_path, stats = train_species(sdir, params, "m", seed=42)
+    scores = read_scores(out_path)[0].set_index("cand_id")["score"]
+    manifest = read_manifest(sdir)
+    for entry, row in zip(manifest["bins"], stats):
+        n_used = row["best_iteration"] + 1
+        assert row["n_rounds_trained"] > n_used  # early stopping really left extra trees behind
+
+        booster = xgb.Booster()
+        booster.load_model(sdir / "models" / "m" / bin_dir_name(entry["pt_lo"], entry["pt_hi"]) / "model.ubj")
+        assert booster.num_boosted_rounds() == n_used
+
+        sample, _ = read_sample(entry["file"], manifest["sample_hash"])
+        raw = booster.predict(xgb.DMatrix(feature_matrix(sample, manifest["features"])))
+        assert np.max(np.abs(raw - scores.loc[sample["cand_id"]].to_numpy())) == 0.0
+
+
 def test_train_species_is_reproducible(species_dir):
     sdir, _ = species_dir
     first, _ = read_scores(train_species(sdir, FAST_PARAMS, "a", seed=42)[0])
