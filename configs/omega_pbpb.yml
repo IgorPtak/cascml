@@ -42,8 +42,6 @@ classes:
   - {name: bkg, source: mc}
   - {name: signal, source: mc}
 
-preselection: []
-
 # Hyperloop train config (cascade-m-l-selection-tree-creator); checked against the data:
 # these are also the effective cuts (no tighter upstream cut).
 tree_creator_cuts:
