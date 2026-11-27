@@ -9,6 +9,11 @@ from cascml.data import DataError, bin_dir_name, read_manifest, read_sample
 from cascml.validate import scores_path, write_scores
 
 
+def feature_matrix(frame, features):
+    """Model input in manifest["features"] order, float32 (the O2 C++ side uses float)."""
+    return frame[features].to_numpy(dtype=np.float32)
+
+
 def train_species(species_dir, xgb_params, model_name, seed):
     """Train one XGBClassifier per pT bin and write models/<model>/scores.parquet."""
     species_dir = Path(species_dir)
@@ -28,12 +33,15 @@ def train_species(species_dir, xgb_params, model_name, seed):
         train = df[df["fold"] > 0]
         val = df[df["fold"] == 0]
         
+        X_train = feature_matrix(train, features)
+        X_val = feature_matrix(val, features)
+        
         clf = xgb.XGBClassifier(**params)
         clf.fit(
-            train[features],
-            train["label"],
-            eval_set=[(val[features], val["label"])],
-            verbose=False
+            X_train,
+            train["label"].to_numpy(),
+            eval_set=[(X_val, val["label"].to_numpy())],
+            verbose=False,
         )
         
         bin_name = bin_dir_name(entry["pt_lo"], entry["pt_hi"])
@@ -41,7 +49,7 @@ def train_species(species_dir, xgb_params, model_name, seed):
         model_file.parent.mkdir(parents=True, exist_ok=True)
         clf.save_model(model_file)
         
-        scores = clf.predict_proba(df[features])[:, 1]
+        scores = clf.predict_proba(feature_matrix(df, features))[:, 1]
         all_cand_ids.append(df["cand_id"].to_numpy())
         all_scores.append(scores)
         bin_stats.append({
