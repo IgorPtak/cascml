@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+import onnxmltools
 import onnxruntime as ort
 import xgboost as xgb
 from onnxmltools import convert_xgboost
@@ -149,4 +150,17 @@ def export_species(species_dir, model_name, onnx_dir_name, opset, seed):
             "us_per_candidate_batch1": latency_us(session, X, batch=1, repeats=200),
             "us_per_candidate_batch1024": latency_us(session, X, batch=1024, repeats=5),
         })
+    meta = {
+        "model": model_name,
+        "species": manifest["species"],
+        "sample_hash": manifest["sample_hash"],
+        "features": features,  # input column order the O2 task must feed
+        "input_name": "input",
+        "signal_output": "last output tensor, column 1",
+        "opset": opset,
+        "versions": {"xgboost": xgb.__version__, "onnxmltools": onnxmltools.__version__,
+                     "onnxruntime": ort.__version__},
+        "bins": records,
+    }
+    (out_dir / "export_meta.json").write_text(json.dumps(meta, indent=2))
     return records

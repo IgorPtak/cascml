@@ -39,6 +39,9 @@ def test_export_matches_validated_scores_including_sentinels(trained):
         assert r["max_abs_diff"] <= 1e-5
         assert r["n_parity_sentinel"] > 0
         assert r["us_per_candidate_batch1"] > 0
+    meta = json.loads((trained / "models" / "m" / "onnx" / "export_meta.json").read_text())
+    assert meta["bins"] == records
+    assert meta["features"] == json.loads((trained / "manifest.json").read_text())["features"]
 
 
 def test_export_rejects_other_sample_hash(trained):
