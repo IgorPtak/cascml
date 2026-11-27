@@ -14,6 +14,17 @@ def feature_matrix(frame, features):
     return frame[features].to_numpy(dtype=np.float32)
 
 
+def resolve_params(params, y_train):
+    """XGBoost params for one pT bin; scale_pos_weight 'auto' becomes n_bkg / n_sig of y_train."""
+    resolved = dict(params)
+    if resolved.get("scale_pos_weight") == "auto":
+        n_sig = int((y_train == 1).sum())
+        if n_sig == 0:
+            raise DataError("scale_pos_weight: auto needs signal in the training folds")
+        resolved["scale_pos_weight"] = (len(y_train) - n_sig) / n_sig
+    return resolved
+
+
 def train_species(species_dir, xgb_params, model_name, seed):
     """Train one XGBClassifier per pT bin and write models/<model>/scores.parquet."""
     species_dir = Path(species_dir)
@@ -34,12 +45,14 @@ def train_species(species_dir, xgb_params, model_name, seed):
         val = df[df["fold"] == 0]
         
         X_train = feature_matrix(train, features)
+        y_train = train["label"].to_numpy()
         X_val = feature_matrix(val, features)
-        
-        clf = xgb.XGBClassifier(**params)
+        bin_params = resolve_params(params, y_train)
+
+        clf = xgb.XGBClassifier(**bin_params)
         clf.fit(
             X_train,
-            train["label"].to_numpy(),
+            y_train,
             eval_set=[(X_val, val["label"].to_numpy())],
             verbose=False,
         )
@@ -57,6 +70,7 @@ def train_species(species_dir, xgb_params, model_name, seed):
             "pt_hi": entry["pt_hi"],
             "best_iteration": getattr(clf, "best_iteration", None),
             "best_score": getattr(clf, "best_score", None),
+            "scale_pos_weight": bin_params.get("scale_pos_weight"),
         })
     
     out_path = scores_path(species_dir, model_name)

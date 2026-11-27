@@ -148,7 +148,12 @@ def model_params_for(params, species):
     if not isinstance(params.get("default"), dict):
         raise ConfigError("model params: 'default' section is required")
     overrides = params.get("per_species", {}).get(species) or {}
-    return {**params["default"], **overrides}
+    merged = {**params["default"], **overrides}
+    spw = merged.get("scale_pos_weight")
+    if spw is not None and spw != "auto":
+        if isinstance(spw, bool) or not isinstance(spw, (int, float)) or spw <= 0:
+            raise ConfigError(f"model params for {species}: scale_pos_weight must be 'auto' or a positive number")
+    return merged
 
 
 def run_prepare(args):
@@ -219,9 +224,11 @@ def run_train(args):
         out_path, stats = train_species(species_dir, xgb_params, args.model, seed)
         print(f"species {sp_name}, model {args.model}: {out_path}")
         for s in stats:
+            spw = s["scale_pos_weight"]
+            spw_text = "default" if spw is None else f"{spw:.1f}"
             print(
                 f"  pT [{s['pt_lo']}, {s['pt_hi']}): "
-                f"best_iter={s['best_iteration']}, val_auc={s['best_score']:.4f}"
+                f"best_iter={s['best_iteration']}, val_auc={s['best_score']:.4f}, scale_pos_weight={spw_text}"
             )
     return 0
 
