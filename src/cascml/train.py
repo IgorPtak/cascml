@@ -27,6 +27,22 @@ def resolve_params(params, y_train):
     return resolved
 
 
+def trim_and_save(clf, path):
+    """Save only the trees up to best_iteration; return the number of rounds trained before trimming.
+
+    After early stopping the booster keeps early_stopping_rounds extra trees and only notes best_iteration.
+    XGBClassifier honours that note, a plain Booster (and onnxmltools on a Booster) does not, so the same
+    file would give two different models. A trimmed file has one meaning for every reader.
+    """
+    booster = clf.get_booster()
+    n_rounds_trained = booster.num_boosted_rounds()
+    best_iteration = getattr(clf, "best_iteration", None)
+    if best_iteration is not None:
+        booster = booster[: best_iteration + 1]
+    booster.save_model(path)
+    return n_rounds_trained
+
+
 def train_species(species_dir, xgb_params, model_name, seed):
     """Train one XGBClassifier per pT bin and write models/<model>/scores.parquet."""
     species_dir = Path(species_dir)
@@ -64,15 +80,20 @@ def train_species(species_dir, xgb_params, model_name, seed):
         bin_name = bin_dir_name(entry["pt_lo"], entry["pt_hi"])
         model_file = species_dir / "models" / model_name / bin_name / "model.ubj"
         model_file.parent.mkdir(parents=True, exist_ok=True)
-        clf.save_model(model_file)
-        
-        scores = clf.predict_proba(feature_matrix(df, features))[:, 1]
+        best_iteration = getattr(clf, "best_iteration", None)
+        n_rounds_trained = trim_and_save(clf, model_file)
+
+        # Scores come from the saved file, i.e. from exactly the model that export will convert.
+        model = xgb.XGBClassifier()
+        model.load_model(model_file)
+        scores = model.predict_proba(feature_matrix(df, features))[:, 1]
         all_cand_ids.append(df["cand_id"].to_numpy())
         all_scores.append(scores)
         bin_stats.append({
             "pt_lo": entry["pt_lo"],
             "pt_hi": entry["pt_hi"],
-            "best_iteration": getattr(clf, "best_iteration", None),
+            "best_iteration": best_iteration,
+            "n_rounds_trained": n_rounds_trained,
             "best_score": getattr(clf, "best_score", None),
             "scale_pos_weight": bin_params.get("scale_pos_weight"),
             "train_time_s": round(train_time_s, 3),
