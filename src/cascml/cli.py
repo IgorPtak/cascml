@@ -7,6 +7,7 @@ from pathlib import Path
 import yaml
 
 from cascml.data import DataError, list_trees, prepare_species, resolve_inputs, write_samples
+from cascml.export import ExportError, export_species
 from cascml.validate import AUC_CI_METHODS, ValidationError, validate_model
 from cascml.train import train_species
 
@@ -136,6 +137,10 @@ def validate_analysis(cfg):
     _require_positive_int(cfg["guards"].get("min_signal_train"), "guards.min_signal_train")
     _require_positive_int(cfg["guards"].get("min_signal_test"), "guards.min_signal_test")
 
+    onnx_dir = (cfg["export"] or {}).get("onnx_dir_name")
+    if not isinstance(onnx_dir, str) or not onnx_dir or "/" in onnx_dir or onnx_dir in (".", ".."):
+        raise ConfigError(f"export.onnx_dir_name must be a plain directory name, got {onnx_dir!r}")
+
     validation = cfg["validation"]
     bootstrap = validation.get("bootstrap") or {}
     if "ci" in bootstrap:
@@ -240,6 +245,25 @@ def run_train(args):
     return 0
 
 
+def run_export(args):
+    """`cascml export`: ONNX files per species and pT bin, verified against the validated scores."""
+    cfg = load_yaml(args.config)
+    validate_analysis(cfg)
+    output_root = _output_root(args)
+    for sp_name in cfg["species"]:
+        species_dir = output_root / cfg["case"] / sp_name
+        records = export_species(
+            species_dir, args.model, cfg["export"]["onnx_dir_name"], args.opset, cfg["split"]["random_state"]
+        )
+        print(f"species {sp_name}, model {args.model}: {species_dir / 'models' / args.model / cfg['export']['onnx_dir_name']}")
+        for r in records:
+            print(
+                f"  {r['file']}: parity max |diff| {r['max_abs_diff']:.2g} on {r['n_parity']} candidates "
+                f"({r['n_parity_sentinel']} with sentinels), {r['us_per_candidate_batch1']:.1f} us/candidate"
+            )
+    return 0
+
+
 def _contains_key(obj, key):
     """Return True if `key` appears in any mapping nested anywhere in `obj`."""
     if isinstance(obj, dict):
@@ -302,9 +326,14 @@ def main(argv=None):
     )
     train.set_defaults(func=run_train)
 
+    export = commands.add_parser("export", parents=[common], help="export a trained model to ONNX for O2Physics")
+    export.add_argument("--model", required=True, help="model name (read from models/<model>/)")
+    export.add_argument("--opset", type=int, default=15, help="ONNX opset (default: 15)")
+    export.set_defaults(func=run_export)
+
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except (ConfigError, DataError, ValidationError) as err:
+    except (ConfigError, DataError, ValidationError, ExportError) as err:
         print(f"cascml: {err}", file=sys.stderr)
         return 1
