@@ -26,6 +26,9 @@ TREE_DEFAULTS = {
     "fDCAv0topv": (np.float32, 0.3),
     "fBachBaryonCosPA": (np.float32, 0.9),
     "fBachBaryonDCAxyToPV": (np.float32, 0.01),
+    "fMXi": (np.float32, 1.3217),
+    "fMOmega": (np.float32, 1.6725),
+    "fCentrality": (np.float32, 50.0),
     "fPt": (np.float32, 1.0),
     "fCharge": (np.int32, -1),
     "fMassWindows": (np.uint8, 1),
@@ -66,6 +69,8 @@ def make_sample():
             part = pd.DataFrame({
                 f: (rng.normal(size=n) + signal_shift * label).astype(np.float32) for f in cfg["features"]
             })
+            for name in cfg["meta_columns"]:
+                part[name] = rng.uniform(size=n).astype(np.float32)
             part["pt"] = rng.uniform(edges[b], edges[b + 1], size=n).astype(np.float32)
             part["charge"] = rng.choice(np.array([-1, 1], dtype=np.int8), size=n)
             part["label"] = label

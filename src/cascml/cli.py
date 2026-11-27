@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 
-from cascml.data import DataError, list_trees, prepare_species, resolve_inputs, write_samples
+from cascml.data import SAMPLE_COLUMNS_EXTRA, DataError, list_trees, prepare_species, resolve_inputs, write_samples
 from cascml.export import ExportError, export_species
 from cascml.validate import AUC_CI_METHODS, ValidationError, validate_model
 from cascml.train import train_species
@@ -39,6 +39,7 @@ TOP_LEVEL_KEYS = {
     "case",
     "input",
     "features",
+    "meta_columns",
     "species",
     "classes",
     "preselection",
@@ -94,7 +95,17 @@ def validate_analysis(cfg):
                 f"feature '{name}': unknown transform '{transform}'; "
                 f"allowed: {sorted(ALLOWED_TRANSFORMS)}"
             )
-            
+
+    meta_columns = cfg["meta_columns"]
+    if not isinstance(meta_columns, dict):
+        raise ConfigError("'meta_columns' must be a mapping (may be empty: {})")
+    reserved = set(features) | set(SAMPLE_COLUMNS_EXTRA) | {"pt_bin"}
+    for name, spec in meta_columns.items():
+        if name in reserved:
+            raise ConfigError(f"meta column '{name}' clashes with a feature or a sample column")
+        if not isinstance(spec, dict) or set(spec) != {"column"}:
+            raise ConfigError(f"meta column '{name}' must be a mapping with only a 'column' key")
+
     species = cfg["species"]
     if not isinstance(species, dict) or not species: 
         raise ConfigError("'species' must be a non-empty mapping")
