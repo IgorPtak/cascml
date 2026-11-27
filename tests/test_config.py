@@ -64,6 +64,7 @@ def test_delong_does_not_need_bootstrap_section(cfg):
         pytest.param(lambda c: c["split"].update(n_folds=1), "at least 2", id="n-folds-one"),
         pytest.param(lambda c: c["guards"].update(min_signal_test=0), "min_signal_test", id="guard-zero"),
         pytest.param(lambda c: c["guards"].update(min_signal_train=True), "min_signal_train", id="guard-bool"),
+        pytest.param(lambda c: c["export"].update(onnx_dir_name="../x"), "onnx_dir_name", id="onnx-dir-path"),
         pytest.param(lambda c: c["validation"].pop("auc_ci"), r"auc_ci\.method", id="auc-ci-missing"),
         pytest.param(lambda c: c["validation"]["auc_ci"].update(method="wilson"), r"auc_ci\.method", id="auc-ci-method"),
         pytest.param(lambda c: c["validation"]["auc_ci"].update(level=95), r"auc_ci\.level", id="auc-ci-level"),
