@@ -38,8 +38,6 @@ classes:
   - {name: bkg, source: mc}
   - {name: signal, source: mc}
 
-preselection: []
-
 tree_creator_cuts:
   getXiMinus: false
   getXiPlus: false

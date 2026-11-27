@@ -57,6 +57,7 @@ def test_delong_does_not_need_bootstrap_section(cfg):
         pytest.param(lambda c: xi(c).update(pt_bins=[-1.0, 2.0]), "non-negative", id="pt-bins-negative"),
         pytest.param(lambda c: xi(c)["signal_flags"].pop("plus"), "signal_flags", id="flags-missing-plus"),
         pytest.param(lambda c: xi(c).update(split_by_charge="no"), "split_by_charge", id="split-by-charge-str"),
+        pytest.param(lambda c: xi(c).update(split_by_charge=True), "not implemented", id="split-by-charge-true"),
         pytest.param(lambda c: c["classes"].reverse(), r"\[bkg, signal\]", id="classes-order"),
         pytest.param(lambda c: c["classes"].pop(), r"\[bkg, signal\]", id="classes-single"),
         pytest.param(
